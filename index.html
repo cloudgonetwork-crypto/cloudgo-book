@@ -78,6 +78,14 @@
   .remove-block{position:absolute;top:14px;right:14px;background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:19px;line-height:1;padding:2px 6px;}
   .remove-block:hover{color:var(--danger);}
 
+  /* Schedule toggle + tip selector */
+  .toggle-row{display:flex;gap:10px;margin-bottom:12px;}
+  .toggle-btn{flex:1;padding:12px;border:1.5px solid var(--line);border-radius:10px;background:var(--white);cursor:pointer;font-family:'Manrope',sans-serif;font-weight:700;font-size:13.5px;text-align:center;color:var(--ink-soft);transition:border-color .15s, background .15s, color .15s;}
+  .toggle-btn.active{border-color:var(--current);background:#EAF6FA;color:var(--current-deep);}
+  .tip-row{display:flex;gap:9px;flex-wrap:wrap;}
+  .tip-btn{padding:10px 16px;border:1.5px solid var(--line);border-radius:20px;background:var(--white);cursor:pointer;font-family:'Manrope',sans-serif;font-weight:700;font-size:13.5px;color:var(--ink-soft);transition:border-color .15s, background .15s, color .15s;}
+  .tip-btn.active{border-color:var(--current);background:#EAF6FA;color:var(--current-deep);}
+
   /* Fare summary */
   .fare-summary{background:var(--depth);color:#EAF3F8;border-radius:14px;padding:22px 24px;margin-top:8px;}
   .fare-row{display:flex;justify-content:space-between;font-size:13.5px;padding:5px 0;color:#C7D9E2;}
@@ -211,13 +219,30 @@
       <div class="card">
         <h2 style="font-size:19px;margin-bottom:16px;">4. Delivery details</h2>
         <div class="field">
-          <label for="requestedTime">When do you need this picked up?</label>
-          <input type="datetime-local" id="requestedTime">
+          <label>When do you need this picked up?</label>
+          <div class="toggle-row">
+            <button type="button" class="toggle-btn active" id="scheduleNowBtn">As soon as possible</button>
+            <button type="button" class="toggle-btn" id="scheduleLaterBtn">Schedule for later</button>
+          </div>
+          <input type="datetime-local" id="requestedTime" style="display:none;">
+          <div class="error-text" id="scheduleError" style="display:none;"></div>
         </div>
         <div class="field">
           <label for="descriptionInput">Item description</label>
           <textarea id="descriptionInput" rows="3" placeholder="What are we delivering? e.g. 2 boxes of documents, approx 5kg"></textarea>
           <div class="error-text" id="descriptionError" style="display:none;"></div>
+        </div>
+        <div class="field">
+          <label>Add a tip for your driver (optional)</label>
+          <div class="tip-row" id="tipRow">
+            <button type="button" class="tip-btn active" data-amount="0">No tip</button>
+            <button type="button" class="tip-btn" data-amount="2">$2</button>
+            <button type="button" class="tip-btn" data-amount="5">$5</button>
+            <button type="button" class="tip-btn" data-amount="10">$10</button>
+            <button type="button" class="tip-btn" id="tipCustomBtn" data-amount="custom">Custom</button>
+          </div>
+          <input type="number" id="tipCustomInput" placeholder="Amount" min="0" step="0.5" style="display:none;margin-top:10px;max-width:140px;">
+          <div class="hint" style="margin-top:8px;">100% of the tip goes to your driver.</div>
         </div>
       </div>
 
@@ -262,6 +287,8 @@ let selectedVehicle = null; // vehicle_rates row
 let pickupPoint = { name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null };
 let stopPoints = [];        // [{name, contact, postal, unit, address, lat, lng}]
 let geocodeTimers = {};
+let scheduleMode = "now";   // "now" | "schedule"
+let tipAmount = 0;
 
 /* ---------------- Helpers ---------------- */
 function el(id){ return document.getElementById(id); }
@@ -507,6 +534,44 @@ function wirePickupEvents(){
   });
 }
 
+function wireScheduleToggle(){
+  el("scheduleNowBtn").addEventListener("click", () => {
+    scheduleMode = "now";
+    el("scheduleNowBtn").classList.add("active");
+    el("scheduleLaterBtn").classList.remove("active");
+    el("requestedTime").style.display = "none";
+    el("scheduleError").style.display = "none";
+  });
+  el("scheduleLaterBtn").addEventListener("click", () => {
+    scheduleMode = "schedule";
+    el("scheduleLaterBtn").classList.add("active");
+    el("scheduleNowBtn").classList.remove("active");
+    el("requestedTime").style.display = "block";
+  });
+}
+
+function wireTipButtons(){
+  document.querySelectorAll(".tip-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tip-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      if (btn.dataset.amount === "custom"){
+        el("tipCustomInput").style.display = "block";
+        el("tipCustomInput").focus();
+        tipAmount = Number(el("tipCustomInput").value) || 0;
+      } else {
+        el("tipCustomInput").style.display = "none";
+        tipAmount = Number(btn.dataset.amount);
+      }
+      computeFare();
+    });
+  });
+  el("tipCustomInput").addEventListener("input", () => {
+    tipAmount = Number(el("tipCustomInput").value) || 0;
+    computeFare();
+  });
+}
+
 function wireBookingEvents(){
   el("addStopBtn").addEventListener("click", () => {
     stopPoints.push({ name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null });
@@ -518,6 +583,8 @@ function wireBookingEvents(){
   }
 
   wirePickupEvents();
+  wireScheduleToggle();
+  wireTipButtons();
 
   el("tabBook").addEventListener("click", () => switchTab("book"));
   el("tabHistory").addEventListener("click", () => switchTab("history"));
@@ -565,15 +632,15 @@ function computeFare(){
   const distanceFare = distKm * Number(selectedVehicle.per_km_rate);
   const stopFare = additionalStops * Number(selectedVehicle.additional_stop_fee);
   const tripFare = baseFare + distanceFare + stopFare;
-  const total = tripFare + platformFlatFee;
+  const total = tripFare + platformFlatFee + tipAmount;
 
   el("fareSummary").innerHTML = `
     <div class="fare-row total"><span>Total price</span><span>${money(total)}</span></div>
-    <div class="fare-note">This price is locked in once you book.</div>
+    <div class="fare-note">${tipAmount > 0 ? `Includes a ${money(tipAmount)} tip for your driver. ` : ""}This price is locked in once you book.</div>
   `;
   submitBtn.disabled = false;
 
-  return { distKm, additionalStops, baseFare, distanceFare, stopFare, platformFlatFee, total };
+  return { distKm, additionalStops, baseFare, distanceFare, stopFare, platformFlatFee, tipAmount, total };
 }
 
 /* ---------------- Submit booking ---------------- */
@@ -592,11 +659,19 @@ async function submitBooking(){
   }
   el("descriptionError").style.display = "none";
 
+  const requestedTimeVal = el("requestedTime").value;
+  if (scheduleMode === "schedule" && !requestedTimeVal){
+    el("scheduleError").style.display = "block";
+    el("scheduleError").textContent = "Pick a date and time, or switch to \"As soon as possible.\"";
+    showBanner("bookBanner", "err", "Please pick a pickup time or choose \"As soon as possible.\"");
+    return;
+  }
+  el("scheduleError").style.display = "none";
+
   const btn = el("submitBookingBtn");
   btn.disabled = true;
   el("submitBtnText").innerHTML = '<span class="spinner"></span> Booking…';
 
-  const requestedTimeVal = el("requestedTime").value;
   const payload = {
     client_id: currentUser.id,
     status: "pending",
@@ -615,12 +690,13 @@ async function submitBooking(){
       unit: s.unit || null, address: s.address || null, lat: s.lat, lng: s.lng
     })),
     distance_km: fare.distKm,
-    requested_time: requestedTimeVal ? new Date(requestedTimeVal).toISOString() : null,
+    requested_time: scheduleMode === "schedule" ? new Date(requestedTimeVal).toISOString() : null,
     notes: description,
     quoted_base_fare: fare.baseFare,
     quoted_distance_fare: fare.distanceFare,
     quoted_stop_fare: fare.stopFare,
     quoted_platform_fee: fare.platformFlatFee,
+    tip_amount: fare.tipAmount,
     quoted_total: fare.total
   };
 
@@ -642,6 +718,15 @@ async function submitBooking(){
   ["pickupName","pickupContact","pickupPostal","pickupUnit","pickupAddress"].forEach(id => el(id).value = "");
   el("descriptionInput").value = "";
   el("requestedTime").value = "";
+  scheduleMode = "now";
+  el("scheduleNowBtn").classList.add("active");
+  el("scheduleLaterBtn").classList.remove("active");
+  el("requestedTime").style.display = "none";
+  tipAmount = 0;
+  el("tipCustomInput").value = "";
+  el("tipCustomInput").style.display = "none";
+  document.querySelectorAll(".tip-btn").forEach(b => b.classList.remove("active"));
+  document.querySelector('.tip-btn[data-amount="0"]').classList.add("active");
   renderStops();
   computeFare();
 }
