@@ -305,13 +305,6 @@ function haversineKm(lat1, lng1, lat2, lng2){
 }
 
 /* ---------------- Geocoding (OneMap Singapore, public search endpoint) ---------------- */
-// Prefer the postal code alone (resolves exactly in Singapore); fall back to the address text.
-function geocodeQuery(point){
-  const postal = (point.postal || "").trim();
-  if (/^\d{6}$/.test(postal)) return postal;
-  return (point.address || "").trim();
-}
-
 async function geocode(query){
   if (!query || query.trim().length < 3) return null;
   try{
@@ -328,18 +321,94 @@ async function geocode(query){
   }
 }
 
-function debounceGeocode(key, errorEl, getPoint, onResolved){
+/* ---------------- Distance: real driving route (OSRM), straight-line fallback ---------------- */
+async function getDrivingDistanceKm(points){
+  const coords = points.map(p => `${p.lng},${p.lat}`).join(";");
+  try{
+    const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=false`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("routing service unavailable");
+    const data = await res.json();
+    if (data.code !== "Ok" || !data.routes || !data.routes.length) throw new Error("no route found");
+    return { km: data.routes[0].distance / 1000, source: "driving" };
+  } catch(e){
+    console.error("Driving route failed, falling back to straight-line", e);
+    let total = 0;
+    for (let i = 0; i < points.length - 1; i++){
+      total += haversineKm(points[i].lat, points[i].lng, points[i+1].lat, points[i+1].lng);
+    }
+    return { km: total, source: "straight-line" };
+  }
+}
+
+let currentDistanceKm = null;
+let currentDistanceSource = null;
+let routeRequestSeq = 0;
+
+async function recalcRoute(){
+  const points = [pickupPoint, ...stopPoints].filter(p => p && p.lat != null && p.lng != null);
+  if (points.length < 2){
+    currentDistanceKm = null;
+    currentDistanceSource = null;
+    computeFare();
+    return;
+  }
+  const mySeq = ++routeRequestSeq;
+  if (selectedVehicle){
+    el("fareSummary").innerHTML = `<div class="fare-row"><span>Calculating your route…</span><span></span></div>`;
+  }
+  const result = await getDrivingDistanceKm(points);
+  if (mySeq !== routeRequestSeq) return; // a newer request superseded this one
+  currentDistanceKm = result.km;
+  currentDistanceSource = result.source;
+  computeFare();
+}
+
+/* Postal code field: resolves location AND auto-fills the address field with the canonical address. */
+function debouncePostalGeocode(key, addressElId, errorElId, getPoint){
   clearTimeout(geocodeTimers[key]);
-  el(errorEl) && (el(errorEl).style.display = "none");
+  el(errorElId) && (el(errorElId).style.display = "none");
   geocodeTimers[key] = setTimeout(async () => {
     const point = getPoint();
-    const query = geocodeQuery(point);
-    const result = await geocode(query);
-    if (!result && query.length >= 3){
-      if (el(errorEl)){ el(errorEl).style.display = "block"; el(errorEl).textContent = "Couldn't find that location — check the postal code or add more of the address."; }
+    const postal = (point.postal || "").trim();
+    if (!/^\d{6}$/.test(postal)) return;
+    const result = await geocode(postal);
+    if (result){
+      point.lat = result.lat;
+      point.lng = result.lng;
+      if (result.resolvedAddress){
+        point.address = result.resolvedAddress;
+        el(addressElId).value = result.resolvedAddress;
+      }
+    } else {
+      point.lat = null;
+      point.lng = null;
+      if (el(errorElId)){ el(errorElId).style.display = "block"; el(errorElId).textContent = "Couldn't find that postal code — double-check it or fill in the address manually."; }
     }
-    onResolved(result ? { lat: result.lat, lng: result.lng } : { lat: null, lng: null });
-    computeFare();
+    recalcRoute();
+  }, 500);
+}
+
+/* Address field: resolves location from typed text, but never overwrites what the person typed. */
+function debounceAddressGeocode(key, errorElId, getPoint){
+  clearTimeout(geocodeTimers[key]);
+  geocodeTimers[key] = setTimeout(async () => {
+    const point = getPoint();
+    // If a valid postal code already resolved this point, don't let a stale address edit clobber it.
+    if (/^\d{6}$/.test((point.postal || "").trim()) && point.lat != null) return;
+    const addr = (point.address || "").trim();
+    if (addr.length < 3) return;
+    const result = await geocode(addr);
+    if (result){
+      point.lat = result.lat;
+      point.lng = result.lng;
+      if (el(errorElId)) el(errorElId).style.display = "none";
+    } else {
+      point.lat = null;
+      point.lng = null;
+      if (el(errorElId)){ el(errorElId).style.display = "block"; el(errorElId).textContent = "Couldn't find that address — try adding the postal code instead."; }
+    }
+    recalcRoute();
   }, 600);
 }
 
@@ -494,16 +563,57 @@ function renderStops(){
       if (inp.classList.contains("stop-unit")) stopPoints[idx].unit = inp.value;
     });
   });
-  document.querySelectorAll(".stop-postal, .stop-address").forEach(inp => {
+  document.querySelectorAll(".stop-postal").forEach(inp => {
     inp.addEventListener("input", () => {
       const idx = parseInt(inp.dataset.idx, 10);
-      if (inp.classList.contains("stop-postal")) stopPoints[idx].postal = inp.value;
-      if (inp.classList.contains("stop-address")) stopPoints[idx].address = inp.value;
-      debounceGeocode("stop"+idx, null, () => stopPoints[idx], (coords) => {
-        stopPoints[idx].lat = coords.lat;
-        stopPoints[idx].lng = coords.lng;
-        computeFare();
-      });
+      stopPoints[idx].postal = inp.value;
+      const addrEl = document.querySelector(`.stop-address[data-idx="${idx}"]`);
+      const errEl = document.querySelector(`.stop-error[data-idx="${idx}"]`);
+      clearTimeout(geocodeTimers["stop"+idx+"-postal"]);
+      if (errEl) errEl.style.display = "none";
+      geocodeTimers["stop"+idx+"-postal"] = setTimeout(async () => {
+        const postal = (stopPoints[idx].postal || "").trim();
+        if (!/^\d{6}$/.test(postal)) return;
+        const result = await geocode(postal);
+        if (result){
+          stopPoints[idx].lat = result.lat;
+          stopPoints[idx].lng = result.lng;
+          if (result.resolvedAddress && addrEl){
+            stopPoints[idx].address = result.resolvedAddress;
+            addrEl.value = result.resolvedAddress;
+          }
+        } else {
+          stopPoints[idx].lat = null;
+          stopPoints[idx].lng = null;
+          if (errEl){ errEl.style.display = "block"; errEl.textContent = "Couldn't find that postal code — double-check it or fill in the address manually."; }
+        }
+        recalcRoute();
+      }, 500);
+    });
+  });
+  document.querySelectorAll(".stop-address").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const idx = parseInt(inp.dataset.idx, 10);
+      stopPoints[idx].address = inp.value;
+      const errEl = document.querySelector(`.stop-error[data-idx="${idx}"]`);
+      clearTimeout(geocodeTimers["stop"+idx+"-address"]);
+      geocodeTimers["stop"+idx+"-address"] = setTimeout(async () => {
+        const point = stopPoints[idx];
+        if (/^\d{6}$/.test((point.postal || "").trim()) && point.lat != null) return;
+        const addr = (point.address || "").trim();
+        if (addr.length < 3) return;
+        const result = await geocode(addr);
+        if (result){
+          point.lat = result.lat;
+          point.lng = result.lng;
+          if (errEl) errEl.style.display = "none";
+        } else {
+          point.lat = null;
+          point.lng = null;
+          if (errEl){ errEl.style.display = "block"; errEl.textContent = "Couldn't find that address — try adding the postal code instead."; }
+        }
+        recalcRoute();
+      }, 600);
     });
   });
   document.querySelectorAll(".remove-block").forEach(btn => {
@@ -511,7 +621,7 @@ function renderStops(){
       const idx = parseInt(btn.dataset.idx, 10);
       stopPoints.splice(idx, 1);
       renderStops();
-      computeFare();
+      recalcRoute();
     });
   });
 }
@@ -521,16 +631,13 @@ function wirePickupEvents(){
   textFields.forEach(([id, key]) => {
     el(id).addEventListener("input", () => { pickupPoint[key] = el(id).value; });
   });
-  ["pickupPostal", "pickupAddress"].forEach(id => {
-    el(id).addEventListener("input", () => {
-      pickupPoint.postal = el("pickupPostal").value;
-      pickupPoint.address = el("pickupAddress").value;
-      debounceGeocode("pickup", "pickupError", () => pickupPoint, (coords) => {
-        pickupPoint.lat = coords.lat;
-        pickupPoint.lng = coords.lng;
-        computeFare();
-      });
-    });
+  el("pickupPostal").addEventListener("input", () => {
+    pickupPoint.postal = el("pickupPostal").value;
+    debouncePostalGeocode("pickup-postal", "pickupAddress", "pickupError", () => pickupPoint);
+  });
+  el("pickupAddress").addEventListener("input", () => {
+    pickupPoint.address = el("pickupAddress").value;
+    debounceAddressGeocode("pickup-address", "pickupError", () => pickupPoint);
   });
 }
 
@@ -600,16 +707,6 @@ function switchTab(name){
 }
 
 /* ---------------- Fare calculation ---------------- */
-function totalDistanceKm(){
-  const points = [pickupPoint, ...stopPoints].filter(p => p && p.lat != null && p.lng != null);
-  if (points.length < 2) return null;
-  let total = 0;
-  for (let i = 0; i < points.length - 1; i++){
-    total += haversineKm(points[i].lat, points[i].lng, points[i+1].lat, points[i+1].lng);
-  }
-  return total;
-}
-
 function computeFare(){
   const submitBtn = el("submitBookingBtn");
   if (!selectedVehicle){
@@ -617,7 +714,7 @@ function computeFare(){
     submitBtn.disabled = true;
     return;
   }
-  const distKm = totalDistanceKm();
+  const distKm = currentDistanceKm;
   const validStops = stopPoints.filter(s => s.lat != null);
   const hasPickup = pickupPoint && pickupPoint.lat != null;
 
@@ -634,9 +731,13 @@ function computeFare(){
   const tripFare = baseFare + distanceFare + stopFare;
   const total = tripFare + platformFlatFee + tipAmount;
 
+  const distanceNote = currentDistanceSource === "straight-line"
+    ? "Driving route unavailable right now, so this uses a straight-line distance estimate. "
+    : "";
+
   el("fareSummary").innerHTML = `
     <div class="fare-row total"><span>Total price</span><span>${money(total)}</span></div>
-    <div class="fare-note">${tipAmount > 0 ? `Includes a ${money(tipAmount)} tip for your driver. ` : ""}This price is locked in once you book.</div>
+    <div class="fare-note">${tipAmount > 0 ? `Includes a ${money(tipAmount)} tip for your driver. ` : ""}${distanceNote}This price is locked in once you book.</div>
   `;
   submitBtn.disabled = false;
 
@@ -712,6 +813,8 @@ async function submitBooking(){
   showBanner("bookBanner", "ok", "Booked! We'll review it and match you with a driver — check My bookings for status.");
   // reset form
   selectedVehicle = null;
+  currentDistanceKm = null;
+  currentDistanceSource = null;
   pickupPoint = { name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null };
   stopPoints = [{ name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null }];
   document.querySelectorAll(".vehicle-card").forEach(c => c.classList.remove("selected"));
