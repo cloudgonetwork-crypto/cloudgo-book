@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Book a delivery — CloudGo</title>
+<meta name="description" content="Book a delivery with CloudGo. Get matched with a driver from our network and track it to drop-off.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --mist:#F7FAFD; --white:#FFFFFF; --ink:#0B1A2B; --ink-soft:#445064; --ink-faint:#7C8896;
+    --current:#2E86AB; --current-deep:#1E6483; --foam:#6FD4E8; --depth:#0F3D5C; --depth-2:#0A2A42;
+    --line:#E3EBF2; --radius:16px; --danger:#C0392B; --warn:#B8860B; --ok:#1E8E5A;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{margin:0;background:var(--mist);color:var(--ink);font-family:'Manrope',sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;}
+  h1,h2,h3{font-family:'Space Grotesk',sans-serif;margin:0;letter-spacing:-0.01em;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+  a{color:inherit;text-decoration:none;}
+  .wrap{max-width:820px;margin:0 auto;padding:0 24px;}
+
+  nav{position:sticky;top:0;z-index:50;background:rgba(247,250,253,0.9);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);}
+  nav .inner{display:flex;align-items:center;justify-content:space-between;height:68px;max-width:820px;margin:0 auto;padding:0 24px;}
+  .brand{display:flex;align-items:center;gap:9px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:18px;}
+  .brand .dot{width:11px;height:11px;border-radius:3px;background:linear-gradient(135deg,var(--foam),var(--current));}
+  .brand small{font-family:'JetBrains Mono',monospace;font-weight:500;font-size:11px;color:var(--ink-faint);letter-spacing:0.02em;margin-left:6px;}
+  .signout{font-size:13px;font-weight:600;color:var(--ink-soft);cursor:pointer;background:none;border:none;padding:8px 4px;}
+  .signout:hover{color:var(--current-deep);}
+
+  main{padding:44px 0 80px;}
+
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-family:'Manrope',sans-serif;font-weight:700;font-size:14.5px;padding:13px 22px;border-radius:11px;border:none;cursor:pointer;transition:transform .15s, box-shadow .15s, opacity .15s;}
+  .btn-primary{background:linear-gradient(135deg,var(--current),var(--current-deep));color:#fff;box-shadow:0 8px 22px -8px rgba(46,134,171,0.55);}
+  .btn-primary:hover:not(:disabled){transform:translateY(-1px);}
+  .btn-primary:disabled{opacity:0.5;cursor:not-allowed;transform:none;}
+  .btn-ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line);}
+  .btn-ghost:hover{border-color:var(--current);color:var(--current-deep);}
+  .btn-block{width:100%;}
+  .btn-sm{padding:9px 14px;font-size:13px;}
+
+  .card{background:var(--white);border:1px solid var(--line);border-radius:var(--radius);padding:28px;}
+  .card + .card{margin-top:20px;}
+
+  input[type=text], input[type=email], input[type=tel], input[type=datetime-local], textarea{
+    width:100%;font-family:'Manrope',sans-serif;font-size:14.5px;padding:12px 14px;border:1.5px solid var(--line);
+    border-radius:10px;background:var(--white);color:var(--ink);transition:border-color .15s;
+  }
+  input:focus, textarea:focus{outline:none;border-color:var(--current);}
+  label{display:block;font-size:13px;font-weight:700;color:var(--ink-soft);margin-bottom:7px;}
+  .field{margin-bottom:18px;}
+  .hint{font-size:12.5px;color:var(--ink-faint);margin-top:6px;}
+  .error-text{font-size:12.5px;color:var(--danger);margin-top:6px;}
+
+  /* Auth screen */
+  .auth-shell{max-width:420px;margin:80px auto 0;padding:0 24px;}
+  .auth-shell h1{font-size:28px;margin-bottom:8px;}
+  .auth-shell p.lead{font-size:15px;color:var(--ink-soft);margin-bottom:28px;line-height:1.55;}
+
+  /* Vehicle picker */
+  .vehicle-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .vehicle-card{border:1.5px solid var(--line);border-radius:13px;padding:16px;cursor:pointer;transition:border-color .15s, background .15s;}
+  .vehicle-card:hover{border-color:var(--current);}
+  .vehicle-card.selected{border-color:var(--current);background:#EAF6FA;}
+  .vehicle-card h3{font-size:16px;font-weight:700;margin-bottom:4px;}
+  .vehicle-card .rate{font-size:13px;color:var(--ink-soft);}
+  .vehicle-card .limits{font-size:11.5px;color:var(--ink-faint);margin-top:8px;}
+
+  /* Stops */
+  .stop-row{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;}
+  .stop-row .stop-label{width:78px;flex-shrink:0;padding-top:12px;font-size:12.5px;font-weight:700;color:var(--ink-faint);}
+  .stop-row input{flex:1;}
+  .stop-remove{flex-shrink:0;background:none;border:none;color:var(--ink-faint);cursor:pointer;padding:11px 6px;font-size:18px;line-height:1;}
+  .stop-remove:hover{color:var(--danger);}
+  .add-stop{font-size:13.5px;font-weight:700;color:var(--current-deep);background:none;border:none;cursor:pointer;padding:6px 0;}
+
+  /* Fare summary */
+  .fare-summary{background:var(--depth);color:#EAF3F8;border-radius:14px;padding:22px 24px;margin-top:8px;}
+  .fare-row{display:flex;justify-content:space-between;font-size:13.5px;padding:5px 0;color:#C7D9E2;}
+  .fare-row.total{border-top:1px solid rgba(255,255,255,0.15);margin-top:8px;padding-top:14px;font-size:19px;font-weight:700;color:#fff;font-family:'Space Grotesk',sans-serif;}
+  .fare-note{font-size:11.5px;color:#8FADBC;margin-top:10px;line-height:1.5;}
+
+  /* Tabs */
+  .tabs{display:flex;gap:6px;margin-bottom:24px;border-bottom:1px solid var(--line);}
+  .tab{padding:12px 4px;margin-right:22px;font-size:14.5px;font-weight:700;color:var(--ink-faint);cursor:pointer;border-bottom:2.5px solid transparent;}
+  .tab.active{color:var(--current-deep);border-bottom-color:var(--current);}
+
+  /* Booking list */
+  .booking-card{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}
+  .booking-card .meta{font-size:12.5px;color:var(--ink-faint);margin-top:4px;}
+  .booking-card .route{font-size:14px;color:var(--ink-soft);margin-top:8px;line-height:1.6;}
+  .badge{font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:20px;text-transform:capitalize;white-space:nowrap;}
+  .badge.pending{background:#FFF4D6;color:var(--warn);}
+  .badge.approved{background:#DFF5E8;color:var(--ok);}
+  .badge.rejected{background:#FCE4E1;color:var(--danger);}
+  .badge.cancelled{background:#EDEFF2;color:var(--ink-faint);}
+  .price{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px;white-space:nowrap;}
+  .empty-state{text-align:center;padding:60px 20px;color:var(--ink-faint);}
+
+  .banner{border-radius:12px;padding:14px 16px;font-size:13.5px;margin-bottom:20px;}
+  .banner.ok{background:#DFF5E8;color:#0E5C36;}
+  .banner.err{background:#FCE4E1;color:#8A2A20;}
+  .banner.info{background:#EAF6FA;color:var(--current-deep);}
+
+  .spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  @media (max-width:560px){
+    .vehicle-grid{grid-template-columns:1fr;}
+    .card{padding:20px;}
+    .stop-row .stop-label{width:60px;font-size:11.5px;}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="inner">
+    <div class="brand"><span class="dot"></span>CloudGo<small>BOOK A DELIVERY</small></div>
+    <button class="signout" id="signOutBtn" style="display:none;">Sign out</button>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ===================== AUTH SCREEN ===================== -->
+  <div class="auth-shell" id="authScreen" style="display:none;">
+    <h1>Book a delivery</h1>
+    <p class="lead">Sign in with your email to book a job and track it through to drop-off. No password needed — we'll send you a link.</p>
+    <div id="authBanner"></div>
+    <div class="field">
+      <label for="authEmail">Email address</label>
+      <input type="email" id="authEmail" placeholder="you@company.com" autocomplete="email">
+    </div>
+    <button class="btn btn-primary btn-block" id="sendLinkBtn">Send me a login link</button>
+    <p class="hint" style="margin-top:16px;">Already have a link in your inbox? Open it on this device to continue.</p>
+  </div>
+
+  <!-- ===================== PROFILE SETUP ===================== -->
+  <div class="wrap" id="profileScreen" style="display:none;">
+    <div class="card">
+      <h2 style="font-size:22px;margin-bottom:6px;">A few details first</h2>
+      <p class="hint" style="margin-bottom:22px;">This helps our drivers and admin team reach you about your bookings.</p>
+      <div id="profileBanner"></div>
+      <div class="field">
+        <label for="pFullName">Full name</label>
+        <input type="text" id="pFullName" placeholder="Jane Tan">
+      </div>
+      <div class="field">
+        <label for="pPhone">Phone number</label>
+        <input type="tel" id="pPhone" placeholder="9123 4567">
+      </div>
+      <div class="field">
+        <label for="pCompany">Company name (optional)</label>
+        <input type="text" id="pCompany" placeholder="Leave blank if booking personally">
+      </div>
+      <button class="btn btn-primary btn-block" id="saveProfileBtn">Continue</button>
+    </div>
+  </div>
+
+  <!-- ===================== MAIN APP ===================== -->
+  <div class="wrap" id="appScreen" style="display:none;">
+    <div class="tabs">
+      <div class="tab active" id="tabBook" data-tab="book">Book a delivery</div>
+      <div class="tab" id="tabHistory" data-tab="history">My bookings</div>
+    </div>
+
+    <!-- Booking tab -->
+    <div id="panelBook">
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:16px;">1. Choose a vehicle</h2>
+        <div class="vehicle-grid" id="vehicleGrid"><div class="hint">Loading rates…</div></div>
+      </div>
+
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:16px;">2. Pickup &amp; drop-off</h2>
+        <div class="field">
+          <label for="pickupInput">Pickup address</label>
+          <input type="text" id="pickupInput" placeholder="e.g. 1 Raffles Place, Singapore">
+          <div class="error-text" id="pickupError" style="display:none;"></div>
+        </div>
+        <div id="stopsContainer"></div>
+        <button class="add-stop" id="addStopBtn">+ Add another stop</button>
+        <div class="field" style="margin-top:20px;">
+          <label for="requestedTime">When do you need this picked up?</label>
+          <input type="datetime-local" id="requestedTime">
+        </div>
+        <div class="field">
+          <label for="notesInput">Notes for the driver (optional)</label>
+          <textarea id="notesInput" rows="3" placeholder="e.g. Call on arrival, fragile item, loading bay at the back"></textarea>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:6px;">3. Review &amp; book</h2>
+        <p class="hint" style="margin-bottom:16px;">Prices update automatically as you fill in the form above.</p>
+        <div class="fare-summary" id="fareSummary">
+          <div class="fare-row"><span>Select a vehicle and addresses to see pricing</span><span></span></div>
+        </div>
+        <div id="bookBanner" style="margin-top:16px;"></div>
+        <button class="btn btn-primary btn-block" id="submitBookingBtn" style="margin-top:16px;" disabled>
+          <span id="submitBtnText">Book this delivery</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- History tab -->
+    <div id="panelHistory" style="display:none;">
+      <div id="historyList"><div class="hint">Loading your bookings…</div></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+/* ==================================================================
+   CONFIG — fill these in with the SAME values used in cloudgo-webapp
+   (Supabase project settings → API). The anon key is safe to expose
+   client-side; RLS policies are what actually protect the data.
+   ================================================================== */
+const SUPABASE_URL = "https://nctegkzmexirmmvvvfsi.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_NeRf8EdEC920z_Mv-fv5cA_3W2noT1J";
+const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // used only if admin_settings can't be read
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ---------------- State ---------------- */
+let currentUser = null;
+let vehicleRates = [];      // from vehicle_rates table
+let platformFlatFee = PLATFORM_FLAT_FEE_FALLBACK;
+let selectedVehicle = null; // vehicle_rates row
+let pickupPoint = null;     // {address, lat, lng}
+let stopPoints = [];        // [{address, lat, lng}]
+let geocodeTimers = {};
+
+/* ---------------- Helpers ---------------- */
+function el(id){ return document.getElementById(id); }
+function money(n){ return "$" + Number(n || 0).toFixed(2); }
+function showBanner(containerId, type, msg){
+  el(containerId).innerHTML = msg ? `<div class="banner ${type}">${msg}</div>` : "";
+}
+function haversineKm(lat1, lng1, lat2, lng2){
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/* ---------------- Geocoding (OneMap Singapore, public search endpoint) ---------------- */
+async function geocode(query){
+  if (!query || query.trim().length < 3) return null;
+  try{
+    const url = `https://www.onemap.gov.sg/api/common/elastic/search?searchVal=${encodeURIComponent(query)}&returnGeom=Y&getAddrDetails=Y&pageNum=1`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.results || !data.results.length) return null;
+    const r = data.results[0];
+    return { address: r.ADDRESS || query, lat: parseFloat(r.LATITUDE), lng: parseFloat(r.LONGITUDE) };
+  } catch(e){
+    console.error("Geocode failed", e);
+    return null;
+  }
+}
+
+function debounceGeocode(key, inputEl, errorEl, onResolved){
+  clearTimeout(geocodeTimers[key]);
+  el(errorEl) && (el(errorEl).style.display = "none");
+  geocodeTimers[key] = setTimeout(async () => {
+    const val = inputEl.value;
+    const point = await geocode(val);
+    if (!point && val.trim().length >= 3){
+      if (el(errorEl)){ el(errorEl).style.display = "block"; el(errorEl).textContent = "Couldn't find that address — try adding more detail (unit, road, postal code)."; }
+    }
+    onResolved(point);
+    computeFare();
+  }, 600);
+}
+
+/* ---------------- Auth ---------------- */
+async function sendMagicLink(){
+  const email = el("authEmail").value.trim();
+  if (!email || !email.includes("@")){
+    showBanner("authBanner", "err", "Enter a valid email address.");
+    return;
+  }
+  el("sendLinkBtn").disabled = true;
+  el("sendLinkBtn").innerHTML = '<span class="spinner"></span> Sending…';
+  const { error } = await sb.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.href }
+  });
+  el("sendLinkBtn").disabled = false;
+  el("sendLinkBtn").textContent = "Send me a login link";
+  if (error){
+    showBanner("authBanner", "err", "Couldn't send the link: " + error.message);
+  } else {
+    showBanner("authBanner", "ok", `Check ${email} for a login link. It'll bring you right back here.`);
+  }
+}
+
+async function signOut(){
+  await sb.auth.signOut();
+  window.location.reload();
+}
+
+/* ---------------- Profile ---------------- */
+async function ensureProfile(){
+  const { data, error } = await sb.from("client_profiles").select("*").eq("id", currentUser.id).maybeSingle();
+  if (error){ console.error(error); }
+  if (data && data.full_name){
+    showScreen("app");
+    initApp();
+    return;
+  }
+  showScreen("profile");
+  if (data){
+    el("pFullName").value = data.full_name || "";
+    el("pPhone").value = data.phone || "";
+    el("pCompany").value = data.company_name || "";
+  }
+}
+
+async function saveProfile(){
+  const full_name = el("pFullName").value.trim();
+  const phone = el("pPhone").value.trim();
+  const company_name = el("pCompany").value.trim();
+  if (!full_name || !phone){
+    showBanner("profileBanner", "err", "Name and phone number are required.");
+    return;
+  }
+  el("saveProfileBtn").disabled = true;
+  const { error } = await sb.from("client_profiles").upsert({
+    id: currentUser.id, full_name, phone, company_name: company_name || null
+  });
+  el("saveProfileBtn").disabled = false;
+  if (error){
+    showBanner("profileBanner", "err", "Couldn't save: " + error.message);
+    return;
+  }
+  showScreen("app");
+  initApp();
+}
+
+/* ---------------- Screens ---------------- */
+function showScreen(name){
+  el("authScreen").style.display = name === "auth" ? "block" : "none";
+  el("profileScreen").style.display = name === "profile" ? "block" : "none";
+  el("appScreen").style.display = name === "app" ? "block" : "none";
+  el("signOutBtn").style.display = name === "app" || name === "profile" ? "inline-block" : "none";
+}
+
+/* ---------------- App init ---------------- */
+let appInitialized = false;
+async function initApp(){
+  if (appInitialized) return;
+  appInitialized = true;
+  await loadVehicleRates();
+  await loadPlatformFee();
+  renderStops();
+  wireBookingEvents();
+}
+
+async function loadPlatformFee(){
+  const { data } = await sb.from("admin_settings").select("platform_flat_fee").eq("id", true).maybeSingle();
+  if (data && data.platform_flat_fee != null) platformFlatFee = Number(data.platform_flat_fee);
+}
+
+async function loadVehicleRates(){
+  const { data, error } = await sb.from("vehicle_rates").select("*").eq("is_active", true).order("sort_order");
+  if (error || !data){
+    el("vehicleGrid").innerHTML = `<div class="error-text">Couldn't load vehicle rates. Refresh to try again.</div>`;
+    return;
+  }
+  vehicleRates = data;
+  el("vehicleGrid").innerHTML = vehicleRates.map(v => `
+    <div class="vehicle-card" data-vehicle="${v.vehicle}">
+      <h3>${v.vehicle}</h3>
+      <div class="rate">${money(v.base_fare)} base + ${money(v.per_km_rate)}/km</div>
+      <div class="rate">+${money(v.additional_stop_fee)} per extra stop</div>
+      <div class="limits">Up to ${v.max_weight_kg}kg · ${v.dimension_cm}</div>
+    </div>
+  `).join("");
+  document.querySelectorAll(".vehicle-card").forEach(cardEl => {
+    cardEl.addEventListener("click", () => {
+      document.querySelectorAll(".vehicle-card").forEach(c => c.classList.remove("selected"));
+      cardEl.classList.add("selected");
+      selectedVehicle = vehicleRates.find(v => v.vehicle === cardEl.dataset.vehicle);
+      computeFare();
+    });
+  });
+}
+
+function renderStops(){
+  el("stopsContainer").innerHTML = stopPoints.map((s, i) => `
+    <div class="stop-row" data-idx="${i}">
+      <div class="stop-label">${i === 0 ? "Drop-off" : "Stop " + (i+1)}</div>
+      <input type="text" class="stop-input" data-idx="${i}" placeholder="e.g. 313 Orchard Road, Singapore" value="${s.address || ""}">
+      ${stopPoints.length > 1 ? `<button class="stop-remove" data-idx="${i}" title="Remove stop">&times;</button>` : ""}
+    </div>
+    <div class="error-text stop-error" data-idx="${i}" style="display:none;"></div>
+  `).join("");
+
+  document.querySelectorAll(".stop-input").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const idx = parseInt(inp.dataset.idx, 10);
+      debounceGeocode("stop"+idx, inp, null, (point) => {
+        stopPoints[idx] = point ? point : { address: inp.value, lat: null, lng: null };
+        computeFare();
+      });
+    });
+  });
+  document.querySelectorAll(".stop-remove").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      stopPoints.splice(idx, 1);
+      renderStops();
+      computeFare();
+    });
+  });
+}
+
+function wireBookingEvents(){
+  el("addStopBtn").addEventListener("click", () => {
+    stopPoints.push({ address: "", lat: null, lng: null });
+    renderStops();
+  });
+  if (stopPoints.length === 0){
+    stopPoints.push({ address: "", lat: null, lng: null });
+    renderStops();
+  }
+
+  el("pickupInput").addEventListener("input", () => {
+    debounceGeocode("pickup", el("pickupInput"), "pickupError", (point) => {
+      pickupPoint = point ? point : { address: el("pickupInput").value, lat: null, lng: null };
+      computeFare();
+    });
+  });
+
+  el("tabBook").addEventListener("click", () => switchTab("book"));
+  el("tabHistory").addEventListener("click", () => switchTab("history"));
+  el("submitBookingBtn").addEventListener("click", submitBooking);
+}
+
+function switchTab(name){
+  el("tabBook").classList.toggle("active", name === "book");
+  el("tabHistory").classList.toggle("active", name === "history");
+  el("panelBook").style.display = name === "book" ? "block" : "none";
+  el("panelHistory").style.display = name === "history" ? "block" : "none";
+  if (name === "history") loadHistory();
+}
+
+/* ---------------- Fare calculation ---------------- */
+function totalDistanceKm(){
+  const points = [pickupPoint, ...stopPoints].filter(p => p && p.lat != null && p.lng != null);
+  if (points.length < 2) return null;
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++){
+    total += haversineKm(points[i].lat, points[i].lng, points[i+1].lat, points[i+1].lng);
+  }
+  return total;
+}
+
+function computeFare(){
+  const submitBtn = el("submitBookingBtn");
+  if (!selectedVehicle){
+    el("fareSummary").innerHTML = `<div class="fare-row"><span>Select a vehicle and addresses to see pricing</span><span></span></div>`;
+    submitBtn.disabled = true;
+    return;
+  }
+  const distKm = totalDistanceKm();
+  const validStops = stopPoints.filter(s => s.lat != null);
+  const hasPickup = pickupPoint && pickupPoint.lat != null;
+
+  if (distKm == null || !hasPickup || validStops.length === 0){
+    el("fareSummary").innerHTML = `<div class="fare-row"><span>Enter pickup and at least one drop-off to see pricing</span><span></span></div>`;
+    submitBtn.disabled = true;
+    return;
+  }
+
+  const additionalStops = Math.max(0, validStops.length - 1);
+  const baseFare = Number(selectedVehicle.base_fare);
+  const distanceFare = distKm * Number(selectedVehicle.per_km_rate);
+  const stopFare = additionalStops * Number(selectedVehicle.additional_stop_fee);
+  const tripFare = baseFare + distanceFare + stopFare;
+  const total = tripFare + platformFlatFee;
+
+  el("fareSummary").innerHTML = `
+    <div class="fare-row"><span>${selectedVehicle.vehicle} base fare</span><span>${money(baseFare)}</span></div>
+    <div class="fare-row"><span>Distance (${distKm.toFixed(1)} km × ${money(selectedVehicle.per_km_rate)}/km)</span><span>${money(distanceFare)}</span></div>
+    ${additionalStops > 0 ? `<div class="fare-row"><span>${additionalStops} additional stop${additionalStops > 1 ? "s" : ""}</span><span>${money(stopFare)}</span></div>` : ""}
+    <div class="fare-row"><span>Platform fee</span><span>${money(platformFlatFee)}</span></div>
+    <div class="fare-row total"><span>Total</span><span>${money(total)}</span></div>
+    <div class="fare-note">Distance is a straight-line estimate between stops; your driver's actual route may vary slightly. This price is locked in once you book.</div>
+  `;
+  submitBtn.disabled = false;
+
+  return { distKm, additionalStops, baseFare, distanceFare, stopFare, platformFlatFee, total };
+}
+
+/* ---------------- Submit booking ---------------- */
+async function submitBooking(){
+  const fare = computeFare();
+  if (!fare){
+    showBanner("bookBanner", "err", "Please complete the vehicle, pickup, and drop-off fields first.");
+    return;
+  }
+  const btn = el("submitBookingBtn");
+  btn.disabled = true;
+  el("submitBtnText").innerHTML = '<span class="spinner"></span> Booking…';
+
+  const requestedTimeVal = el("requestedTime").value;
+  const payload = {
+    client_id: currentUser.id,
+    status: "pending",
+    vehicle: selectedVehicle.vehicle,
+    pickup_address: pickupPoint.address,
+    pickup_lat: pickupPoint.lat,
+    pickup_lng: pickupPoint.lng,
+    dropoff_details: stopPoints.filter(s => s.lat != null),
+    distance_km: fare.distKm,
+    requested_time: requestedTimeVal ? new Date(requestedTimeVal).toISOString() : null,
+    notes: el("notesInput").value.trim() || null,
+    quoted_base_fare: fare.baseFare,
+    quoted_distance_fare: fare.distanceFare,
+    quoted_stop_fare: fare.stopFare,
+    quoted_platform_fee: fare.platformFlatFee,
+    quoted_total: fare.total
+  };
+
+  const { error } = await sb.from("client_bookings").insert(payload);
+  btn.disabled = false;
+  el("submitBtnText").textContent = "Book this delivery";
+
+  if (error){
+    showBanner("bookBanner", "err", "Couldn't submit your booking: " + error.message);
+    return;
+  }
+
+  showBanner("bookBanner", "ok", "Booked! We'll review it and match you with a driver — check My bookings for status.");
+  // reset form
+  selectedVehicle = null;
+  pickupPoint = null;
+  stopPoints = [{ address: "", lat: null, lng: null }];
+  document.querySelectorAll(".vehicle-card").forEach(c => c.classList.remove("selected"));
+  el("pickupInput").value = "";
+  el("notesInput").value = "";
+  el("requestedTime").value = "";
+  renderStops();
+  computeFare();
+}
+
+/* ---------------- History ---------------- */
+async function loadHistory(){
+  el("historyList").innerHTML = `<div class="hint">Loading your bookings…</div>`;
+  const { data, error } = await sb.from("client_bookings")
+    .select("*").eq("client_id", currentUser.id).order("created_at", { ascending: false });
+
+  if (error){
+    el("historyList").innerHTML = `<div class="error-text">Couldn't load your bookings.</div>`;
+    return;
+  }
+  if (!data || data.length === 0){
+    el("historyList").innerHTML = `<div class="empty-state">No bookings yet — book your first delivery above.</div>`;
+    return;
+  }
+  el("historyList").innerHTML = data.map(b => {
+    const stops = (b.dropoff_details || []).map(d => d.address).join(" → ");
+    const when = new Date(b.created_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" });
+    return `
+      <div class="card booking-card">
+        <div>
+          <div style="font-weight:700;">${b.vehicle || "—"}</div>
+          <div class="route">${b.pickup_address} → ${stops}</div>
+          <div class="meta">Booked ${when}</div>
+        </div>
+        <div style="text-align:right;">
+          <span class="badge ${b.status}">${b.status}</span>
+          <div class="price" style="margin-top:10px;">${money(b.quoted_total)}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+/* ---------------- Boot ---------------- */
+el("sendLinkBtn").addEventListener("click", sendMagicLink);
+el("authEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") sendMagicLink(); });
+el("saveProfileBtn").addEventListener("click", saveProfile);
+el("signOutBtn").addEventListener("click", signOut);
+
+sb.auth.onAuthStateChange((event, session) => {
+  if (session && session.user){
+    currentUser = session.user;
+    ensureProfile();
+  } else if (event === "SIGNED_OUT"){
+    showScreen("auth");
+  }
+});
+
+(async function boot(){
+  const { data: { session } } = await sb.auth.getSession();
+  if (session && session.user){
+    currentUser = session.user;
+    ensureProfile();
+  } else {
+    showScreen("auth");
+  }
+})();
+</script>
+
+</body>
+</html>
