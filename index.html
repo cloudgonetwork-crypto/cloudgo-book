@@ -69,12 +69,14 @@
   .vehicle-card .limits{font-size:11.5px;color:var(--ink-faint);margin-top:8px;}
 
   /* Stops */
-  .stop-row{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px;}
-  .stop-row .stop-label{width:78px;flex-shrink:0;padding-top:12px;font-size:12.5px;font-weight:700;color:var(--ink-faint);}
-  .stop-row input{flex:1;}
-  .stop-remove{flex-shrink:0;background:none;border:none;color:var(--ink-faint);cursor:pointer;padding:11px 6px;font-size:18px;line-height:1;}
-  .stop-remove:hover{color:var(--danger);}
   .add-stop{font-size:13.5px;font-weight:700;color:var(--current-deep);background:none;border:none;cursor:pointer;padding:6px 0;}
+  .addr-block{border:1.5px solid var(--line);border-radius:12px;padding:18px;margin-bottom:14px;position:relative;}
+  .addr-block .addr-label{font-size:13.5px;font-weight:700;color:var(--current-deep);margin-bottom:14px;}
+  .addr-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px;}
+  .addr-grid .field{margin-bottom:0;}
+  .addr-grid .full{grid-column:1 / -1;}
+  .remove-block{position:absolute;top:14px;right:14px;background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:19px;line-height:1;padding:2px 6px;}
+  .remove-block:hover{color:var(--danger);}
 
   /* Fare summary */
   .fare-summary{background:var(--depth);color:#EAF3F8;border-radius:14px;padding:22px 24px;margin-top:8px;}
@@ -110,7 +112,7 @@
   @media (max-width:560px){
     .vehicle-grid{grid-template-columns:1fr;}
     .card{padding:20px;}
-    .stop-row .stop-label{width:60px;font-size:11.5px;}
+    .addr-grid{grid-template-columns:1fr;}
   }
 </style>
 </head>
@@ -128,8 +130,17 @@
   <!-- ===================== AUTH SCREEN ===================== -->
   <div class="auth-shell" id="authScreen" style="display:none;">
     <h1>Book a delivery</h1>
-    <p class="lead">Sign in with your email to book a job and track it through to drop-off. No password needed — we'll send you a link.</p>
+    <p class="lead">Sign in to book a job and track it through to drop-off.</p>
     <div id="authBanner"></div>
+    <button class="btn btn-ghost btn-block" id="googleSignInBtn" style="margin-bottom:18px;">
+      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.91c1.7-1.57 2.69-3.88 2.69-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.91-2.26c-.81.54-1.84.86-3.05.86-2.34 0-4.33-1.58-5.04-3.71H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.96 10.71a5.4 5.4 0 0 1 0-3.42V4.96H.96a9 9 0 0 0 0 8.08l3-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.96l3 2.33C4.67 5.16 6.66 3.58 9 3.58z"/></svg>
+      Continue with Google
+    </button>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+      <div style="flex:1;height:1px;background:var(--line);"></div>
+      <span style="font-size:12px;color:var(--ink-faint);">or</span>
+      <div style="flex:1;height:1px;background:var(--line);"></div>
+    </div>
     <div class="field">
       <label for="authEmail">Email address</label>
       <input type="email" id="authEmail" placeholder="you@company.com" autocomplete="email">
@@ -145,16 +156,16 @@
       <p class="hint" style="margin-bottom:22px;">This helps our drivers and admin team reach you about your bookings.</p>
       <div id="profileBanner"></div>
       <div class="field">
-        <label for="pFullName">Full name</label>
+        <label for="pFullName">Name</label>
         <input type="text" id="pFullName" placeholder="Jane Tan">
       </div>
       <div class="field">
-        <label for="pPhone">Phone number</label>
+        <label for="pPhone">Contact number</label>
         <input type="tel" id="pPhone" placeholder="9123 4567">
       </div>
       <div class="field">
-        <label for="pCompany">Company name (optional)</label>
-        <input type="text" id="pCompany" placeholder="Leave blank if booking personally">
+        <label>Email</label>
+        <input type="text" id="pEmail" disabled style="background:var(--mist);color:var(--ink-faint);">
       </div>
       <button class="btn btn-primary btn-block" id="saveProfileBtn">Continue</button>
     </div>
@@ -175,29 +186,46 @@
       </div>
 
       <div class="card">
-        <h2 style="font-size:19px;margin-bottom:16px;">2. Pickup &amp; drop-off</h2>
-        <div class="field">
-          <label for="pickupInput">Pickup address</label>
-          <input type="text" id="pickupInput" placeholder="e.g. 1 Raffles Place, Singapore">
-          <div class="error-text" id="pickupError" style="display:none;"></div>
-        </div>
-        <div id="stopsContainer"></div>
-        <button class="add-stop" id="addStopBtn">+ Add another stop</button>
-        <div class="field" style="margin-top:20px;">
-          <label for="requestedTime">When do you need this picked up?</label>
-          <input type="datetime-local" id="requestedTime">
-        </div>
-        <div class="field">
-          <label for="notesInput">Notes for the driver (optional)</label>
-          <textarea id="notesInput" rows="3" placeholder="e.g. Call on arrival, fragile item, loading bay at the back"></textarea>
+        <h2 style="font-size:19px;margin-bottom:16px;">2. Pickup details</h2>
+        <div class="addr-block">
+          <div class="addr-grid">
+            <div class="field"><label for="pickupName">Name</label><input type="text" id="pickupName" placeholder="Who's handing over the item"></div>
+            <div class="field"><label for="pickupContact">Contact number</label><input type="tel" id="pickupContact" placeholder="9123 4567"></div>
+            <div class="field"><label for="pickupPostal">Postal code</label><input type="text" id="pickupPostal" placeholder="238859" inputmode="numeric" maxlength="6"></div>
+            <div class="field"><label for="pickupUnit">Unit number (optional)</label><input type="text" id="pickupUnit" placeholder="#12-34"></div>
+            <div class="field full">
+              <label for="pickupAddress">Address</label>
+              <input type="text" id="pickupAddress" placeholder="e.g. 1 Raffles Place">
+              <div class="error-text" id="pickupError" style="display:none;"></div>
+            </div>
+          </div>
         </div>
       </div>
 
       <div class="card">
-        <h2 style="font-size:19px;margin-bottom:6px;">3. Review &amp; book</h2>
-        <p class="hint" style="margin-bottom:16px;">Prices update automatically as you fill in the form above.</p>
+        <h2 style="font-size:19px;margin-bottom:16px;">3. Drop-off details</h2>
+        <div id="stopsContainer"></div>
+        <button class="add-stop" id="addStopBtn">+ Add another drop-off</button>
+      </div>
+
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:16px;">4. Delivery details</h2>
+        <div class="field">
+          <label for="requestedTime">When do you need this picked up?</label>
+          <input type="datetime-local" id="requestedTime">
+        </div>
+        <div class="field">
+          <label for="descriptionInput">Item description</label>
+          <textarea id="descriptionInput" rows="3" placeholder="What are we delivering? e.g. 2 boxes of documents, approx 5kg"></textarea>
+          <div class="error-text" id="descriptionError" style="display:none;"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:6px;">5. Review &amp; book</h2>
+        <p class="hint" style="margin-bottom:16px;">Price updates automatically as you fill in the form above.</p>
         <div class="fare-summary" id="fareSummary">
-          <div class="fare-row"><span>Select a vehicle and addresses to see pricing</span><span></span></div>
+          <div class="fare-row"><span>Fill in the form above to see your price</span><span></span></div>
         </div>
         <div id="bookBanner" style="margin-top:16px;"></div>
         <button class="btn btn-primary btn-block" id="submitBookingBtn" style="margin-top:16px;" disabled>
@@ -231,8 +259,8 @@ let currentUser = null;
 let vehicleRates = [];      // from vehicle_rates table
 let platformFlatFee = PLATFORM_FLAT_FEE_FALLBACK;
 let selectedVehicle = null; // vehicle_rates row
-let pickupPoint = null;     // {address, lat, lng}
-let stopPoints = [];        // [{address, lat, lng}]
+let pickupPoint = { name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null };
+let stopPoints = [];        // [{name, contact, postal, unit, address, lat, lng}]
 let geocodeTimers = {};
 
 /* ---------------- Helpers ---------------- */
@@ -250,6 +278,13 @@ function haversineKm(lat1, lng1, lat2, lng2){
 }
 
 /* ---------------- Geocoding (OneMap Singapore, public search endpoint) ---------------- */
+// Prefer the postal code alone (resolves exactly in Singapore); fall back to the address text.
+function geocodeQuery(point){
+  const postal = (point.postal || "").trim();
+  if (/^\d{6}$/.test(postal)) return postal;
+  return (point.address || "").trim();
+}
+
 async function geocode(query){
   if (!query || query.trim().length < 3) return null;
   try{
@@ -259,28 +294,40 @@ async function geocode(query){
     const data = await res.json();
     if (!data.results || !data.results.length) return null;
     const r = data.results[0];
-    return { address: r.ADDRESS || query, lat: parseFloat(r.LATITUDE), lng: parseFloat(r.LONGITUDE) };
+    return { lat: parseFloat(r.LATITUDE), lng: parseFloat(r.LONGITUDE), resolvedAddress: r.ADDRESS || null };
   } catch(e){
     console.error("Geocode failed", e);
     return null;
   }
 }
 
-function debounceGeocode(key, inputEl, errorEl, onResolved){
+function debounceGeocode(key, errorEl, getPoint, onResolved){
   clearTimeout(geocodeTimers[key]);
   el(errorEl) && (el(errorEl).style.display = "none");
   geocodeTimers[key] = setTimeout(async () => {
-    const val = inputEl.value;
-    const point = await geocode(val);
-    if (!point && val.trim().length >= 3){
-      if (el(errorEl)){ el(errorEl).style.display = "block"; el(errorEl).textContent = "Couldn't find that address — try adding more detail (unit, road, postal code)."; }
+    const point = getPoint();
+    const query = geocodeQuery(point);
+    const result = await geocode(query);
+    if (!result && query.length >= 3){
+      if (el(errorEl)){ el(errorEl).style.display = "block"; el(errorEl).textContent = "Couldn't find that location — check the postal code or add more of the address."; }
     }
-    onResolved(point);
+    onResolved(result ? { lat: result.lat, lng: result.lng } : { lat: null, lng: null });
     computeFare();
   }, 600);
 }
 
 /* ---------------- Auth ---------------- */
+async function signInWithGoogle(){
+  const { error } = await sb.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: window.location.origin + window.location.pathname }
+  });
+  if (error){
+    showBanner("authBanner", "err", "Google sign-in failed: " + error.message);
+  }
+  // on success, the browser redirects to Google — no further code runs here
+}
+
 async function sendMagicLink(){
   const email = el("authEmail").value.trim();
   if (!email || !email.includes("@")){
@@ -311,6 +358,7 @@ async function signOut(){
 async function ensureProfile(){
   const { data, error } = await sb.from("client_profiles").select("*").eq("id", currentUser.id).maybeSingle();
   if (error){ console.error(error); }
+  el("pEmail").value = currentUser.email || "";
   if (data && data.full_name){
     showScreen("app");
     initApp();
@@ -320,21 +368,19 @@ async function ensureProfile(){
   if (data){
     el("pFullName").value = data.full_name || "";
     el("pPhone").value = data.phone || "";
-    el("pCompany").value = data.company_name || "";
   }
 }
 
 async function saveProfile(){
   const full_name = el("pFullName").value.trim();
   const phone = el("pPhone").value.trim();
-  const company_name = el("pCompany").value.trim();
   if (!full_name || !phone){
-    showBanner("profileBanner", "err", "Name and phone number are required.");
+    showBanner("profileBanner", "err", "Name and contact number are required.");
     return;
   }
   el("saveProfileBtn").disabled = true;
   const { error } = await sb.from("client_profiles").upsert({
-    id: currentUser.id, full_name, phone, company_name: company_name || null
+    id: currentUser.id, full_name, phone
   });
   el("saveProfileBtn").disabled = false;
   if (error){
@@ -396,24 +442,44 @@ async function loadVehicleRates(){
 
 function renderStops(){
   el("stopsContainer").innerHTML = stopPoints.map((s, i) => `
-    <div class="stop-row" data-idx="${i}">
-      <div class="stop-label">${i === 0 ? "Drop-off" : "Stop " + (i+1)}</div>
-      <input type="text" class="stop-input" data-idx="${i}" placeholder="e.g. 313 Orchard Road, Singapore" value="${s.address || ""}">
-      ${stopPoints.length > 1 ? `<button class="stop-remove" data-idx="${i}" title="Remove stop">&times;</button>` : ""}
+    <div class="addr-block" data-idx="${i}">
+      <div class="addr-label">Drop-off ${i + 1}</div>
+      ${stopPoints.length > 1 ? `<button class="remove-block" data-idx="${i}" title="Remove this drop-off">&times;</button>` : ""}
+      <div class="addr-grid">
+        <div class="field"><label>Name</label><input type="text" class="stop-name" data-idx="${i}" placeholder="Who's receiving the item" value="${s.name || ""}"></div>
+        <div class="field"><label>Contact number</label><input type="tel" class="stop-contact" data-idx="${i}" placeholder="9123 4567" value="${s.contact || ""}"></div>
+        <div class="field"><label>Postal code</label><input type="text" class="stop-postal" data-idx="${i}" placeholder="238859" inputmode="numeric" maxlength="6" value="${s.postal || ""}"></div>
+        <div class="field"><label>Unit number (optional)</label><input type="text" class="stop-unit" data-idx="${i}" placeholder="#12-34" value="${s.unit || ""}"></div>
+        <div class="field full">
+          <label>Address</label>
+          <input type="text" class="stop-address" data-idx="${i}" placeholder="e.g. 313 Orchard Road" value="${s.address || ""}">
+          <div class="error-text stop-error" data-idx="${i}" style="display:none;"></div>
+        </div>
+      </div>
     </div>
-    <div class="error-text stop-error" data-idx="${i}" style="display:none;"></div>
   `).join("");
 
-  document.querySelectorAll(".stop-input").forEach(inp => {
+  document.querySelectorAll(".stop-name, .stop-contact, .stop-unit").forEach(inp => {
     inp.addEventListener("input", () => {
       const idx = parseInt(inp.dataset.idx, 10);
-      debounceGeocode("stop"+idx, inp, null, (point) => {
-        stopPoints[idx] = point ? point : { address: inp.value, lat: null, lng: null };
+      if (inp.classList.contains("stop-name")) stopPoints[idx].name = inp.value;
+      if (inp.classList.contains("stop-contact")) stopPoints[idx].contact = inp.value;
+      if (inp.classList.contains("stop-unit")) stopPoints[idx].unit = inp.value;
+    });
+  });
+  document.querySelectorAll(".stop-postal, .stop-address").forEach(inp => {
+    inp.addEventListener("input", () => {
+      const idx = parseInt(inp.dataset.idx, 10);
+      if (inp.classList.contains("stop-postal")) stopPoints[idx].postal = inp.value;
+      if (inp.classList.contains("stop-address")) stopPoints[idx].address = inp.value;
+      debounceGeocode("stop"+idx, null, () => stopPoints[idx], (coords) => {
+        stopPoints[idx].lat = coords.lat;
+        stopPoints[idx].lng = coords.lng;
         computeFare();
       });
     });
   });
-  document.querySelectorAll(".stop-remove").forEach(btn => {
+  document.querySelectorAll(".remove-block").forEach(btn => {
     btn.addEventListener("click", () => {
       const idx = parseInt(btn.dataset.idx, 10);
       stopPoints.splice(idx, 1);
@@ -423,22 +489,35 @@ function renderStops(){
   });
 }
 
+function wirePickupEvents(){
+  const textFields = [["pickupName","name"], ["pickupContact","contact"], ["pickupUnit","unit"]];
+  textFields.forEach(([id, key]) => {
+    el(id).addEventListener("input", () => { pickupPoint[key] = el(id).value; });
+  });
+  ["pickupPostal", "pickupAddress"].forEach(id => {
+    el(id).addEventListener("input", () => {
+      pickupPoint.postal = el("pickupPostal").value;
+      pickupPoint.address = el("pickupAddress").value;
+      debounceGeocode("pickup", "pickupError", () => pickupPoint, (coords) => {
+        pickupPoint.lat = coords.lat;
+        pickupPoint.lng = coords.lng;
+        computeFare();
+      });
+    });
+  });
+}
+
 function wireBookingEvents(){
   el("addStopBtn").addEventListener("click", () => {
-    stopPoints.push({ address: "", lat: null, lng: null });
+    stopPoints.push({ name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null });
     renderStops();
   });
   if (stopPoints.length === 0){
-    stopPoints.push({ address: "", lat: null, lng: null });
+    stopPoints.push({ name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null });
     renderStops();
   }
 
-  el("pickupInput").addEventListener("input", () => {
-    debounceGeocode("pickup", el("pickupInput"), "pickupError", (point) => {
-      pickupPoint = point ? point : { address: el("pickupInput").value, lat: null, lng: null };
-      computeFare();
-    });
-  });
+  wirePickupEvents();
 
   el("tabBook").addEventListener("click", () => switchTab("book"));
   el("tabHistory").addEventListener("click", () => switchTab("history"));
@@ -467,7 +546,7 @@ function totalDistanceKm(){
 function computeFare(){
   const submitBtn = el("submitBookingBtn");
   if (!selectedVehicle){
-    el("fareSummary").innerHTML = `<div class="fare-row"><span>Select a vehicle and addresses to see pricing</span><span></span></div>`;
+    el("fareSummary").innerHTML = `<div class="fare-row"><span>Fill in the form above to see your price</span><span></span></div>`;
     submitBtn.disabled = true;
     return;
   }
@@ -476,7 +555,7 @@ function computeFare(){
   const hasPickup = pickupPoint && pickupPoint.lat != null;
 
   if (distKm == null || !hasPickup || validStops.length === 0){
-    el("fareSummary").innerHTML = `<div class="fare-row"><span>Enter pickup and at least one drop-off to see pricing</span><span></span></div>`;
+    el("fareSummary").innerHTML = `<div class="fare-row"><span>Fill in the form above to see your price</span><span></span></div>`;
     submitBtn.disabled = true;
     return;
   }
@@ -489,12 +568,8 @@ function computeFare(){
   const total = tripFare + platformFlatFee;
 
   el("fareSummary").innerHTML = `
-    <div class="fare-row"><span>${selectedVehicle.vehicle} base fare</span><span>${money(baseFare)}</span></div>
-    <div class="fare-row"><span>Distance (${distKm.toFixed(1)} km × ${money(selectedVehicle.per_km_rate)}/km)</span><span>${money(distanceFare)}</span></div>
-    ${additionalStops > 0 ? `<div class="fare-row"><span>${additionalStops} additional stop${additionalStops > 1 ? "s" : ""}</span><span>${money(stopFare)}</span></div>` : ""}
-    <div class="fare-row"><span>Platform fee</span><span>${money(platformFlatFee)}</span></div>
-    <div class="fare-row total"><span>Total</span><span>${money(total)}</span></div>
-    <div class="fare-note">Distance is a straight-line estimate between stops; your driver's actual route may vary slightly. This price is locked in once you book.</div>
+    <div class="fare-row total"><span>Total price</span><span>${money(total)}</span></div>
+    <div class="fare-note">This price is locked in once you book.</div>
   `;
   submitBtn.disabled = false;
 
@@ -508,6 +583,15 @@ async function submitBooking(){
     showBanner("bookBanner", "err", "Please complete the vehicle, pickup, and drop-off fields first.");
     return;
   }
+  const description = el("descriptionInput").value.trim();
+  if (!description){
+    el("descriptionError").style.display = "block";
+    el("descriptionError").textContent = "Please describe what's being delivered.";
+    showBanner("bookBanner", "err", "Please add an item description before booking.");
+    return;
+  }
+  el("descriptionError").style.display = "none";
+
   const btn = el("submitBookingBtn");
   btn.disabled = true;
   el("submitBtnText").innerHTML = '<span class="spinner"></span> Booking…';
@@ -520,10 +604,19 @@ async function submitBooking(){
     pickup_address: pickupPoint.address,
     pickup_lat: pickupPoint.lat,
     pickup_lng: pickupPoint.lng,
-    dropoff_details: stopPoints.filter(s => s.lat != null),
+    pickup_contact: {
+      name: pickupPoint.name || null,
+      contact: pickupPoint.contact || null,
+      postal: pickupPoint.postal || null,
+      unit: pickupPoint.unit || null
+    },
+    dropoff_details: stopPoints.filter(s => s.lat != null).map(s => ({
+      name: s.name || null, contact: s.contact || null, postal: s.postal || null,
+      unit: s.unit || null, address: s.address || null, lat: s.lat, lng: s.lng
+    })),
     distance_km: fare.distKm,
     requested_time: requestedTimeVal ? new Date(requestedTimeVal).toISOString() : null,
-    notes: el("notesInput").value.trim() || null,
+    notes: description,
     quoted_base_fare: fare.baseFare,
     quoted_distance_fare: fare.distanceFare,
     quoted_stop_fare: fare.stopFare,
@@ -543,11 +636,11 @@ async function submitBooking(){
   showBanner("bookBanner", "ok", "Booked! We'll review it and match you with a driver — check My bookings for status.");
   // reset form
   selectedVehicle = null;
-  pickupPoint = null;
-  stopPoints = [{ address: "", lat: null, lng: null }];
+  pickupPoint = { name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null };
+  stopPoints = [{ name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null }];
   document.querySelectorAll(".vehicle-card").forEach(c => c.classList.remove("selected"));
-  el("pickupInput").value = "";
-  el("notesInput").value = "";
+  ["pickupName","pickupContact","pickupPostal","pickupUnit","pickupAddress"].forEach(id => el(id).value = "");
+  el("descriptionInput").value = "";
   el("requestedTime").value = "";
   renderStops();
   computeFare();
@@ -575,6 +668,7 @@ async function loadHistory(){
         <div>
           <div style="font-weight:700;">${b.vehicle || "—"}</div>
           <div class="route">${b.pickup_address} → ${stops}</div>
+          ${b.notes ? `<div class="meta">${b.notes}</div>` : ""}
           <div class="meta">Booked ${when}</div>
         </div>
         <div style="text-align:right;">
@@ -589,6 +683,7 @@ async function loadHistory(){
 /* ---------------- Boot ---------------- */
 el("sendLinkBtn").addEventListener("click", sendMagicLink);
 el("authEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") sendMagicLink(); });
+el("googleSignInBtn").addEventListener("click", signInWithGoogle);
 el("saveProfileBtn").addEventListener("click", saveProfile);
 el("signOutBtn").addEventListener("click", signOut);
 
