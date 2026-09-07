@@ -78,6 +78,16 @@
   .remove-block{position:absolute;top:14px;right:14px;background:none;border:none;color:var(--ink-faint);cursor:pointer;font-size:19px;line-height:1;padding:2px 6px;}
   .remove-block:hover{color:var(--danger);}
 
+  /* Saved addresses */
+  .saved-select{width:100%;padding:10px 12px;margin-bottom:14px;border:1.5px solid var(--line);border-radius:10px;font-family:'Manrope',sans-serif;font-size:13.5px;color:var(--ink-soft);background:var(--white);}
+  .saved-address-card{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px;}
+  .saved-address-card .label{font-weight:700;font-size:14.5px;margin-bottom:4px;}
+  .saved-address-card .addr-text{font-size:13px;color:var(--ink-soft);line-height:1.5;}
+  .saved-address-actions{display:flex;gap:14px;flex-shrink:0;}
+  .icon-btn{background:none;border:none;cursor:pointer;color:var(--ink-faint);font-size:13px;font-weight:700;padding:2px;}
+  .icon-btn:hover{color:var(--current-deep);}
+  .icon-btn.danger:hover{color:var(--danger);}
+
   /* Schedule toggle + tip selector */
   .toggle-row{display:flex;gap:10px;margin-bottom:12px;}
   .toggle-btn{flex:1;padding:12px;border:1.5px solid var(--line);border-radius:10px;background:var(--white);cursor:pointer;font-family:'Manrope',sans-serif;font-weight:700;font-size:13.5px;text-align:center;color:var(--ink-soft);transition:border-color .15s, background .15s, color .15s;}
@@ -184,6 +194,7 @@
     <div class="tabs">
       <div class="tab active" id="tabBook" data-tab="book">Book a delivery</div>
       <div class="tab" id="tabHistory" data-tab="history">My bookings</div>
+      <div class="tab" id="tabProfile" data-tab="profile">Profile</div>
     </div>
 
     <!-- Booking tab -->
@@ -196,6 +207,9 @@
       <div class="card">
         <h2 style="font-size:19px;margin-bottom:16px;">2. Pickup details</h2>
         <div class="addr-block">
+          <select class="saved-select" id="pickupSavedSelect">
+            <option value="">Use a saved address (optional)</option>
+          </select>
           <div class="addr-grid">
             <div class="field"><label for="pickupName">Name</label><input type="text" id="pickupName" placeholder="Who's handing over the item"></div>
             <div class="field"><label for="pickupContact">Contact number</label><input type="tel" id="pickupContact" placeholder="9123 4567"></div>
@@ -263,6 +277,54 @@
     <div id="panelHistory" style="display:none;">
       <div id="historyList"><div class="hint">Loading your bookings…</div></div>
     </div>
+
+    <!-- Profile tab -->
+    <div id="panelProfile" style="display:none;">
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:16px;">Your details</h2>
+        <div id="acctBanner"></div>
+        <div class="field">
+          <label for="acctFullName">Name</label>
+          <input type="text" id="acctFullName">
+        </div>
+        <div class="field">
+          <label for="acctPhone">Contact number</label>
+          <input type="tel" id="acctPhone">
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="text" id="acctEmail" disabled style="background:var(--mist);color:var(--ink-faint);">
+        </div>
+        <button class="btn btn-primary" id="acctSaveBtn">Save changes</button>
+      </div>
+
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:6px;">Saved addresses</h2>
+        <p class="hint" style="margin-bottom:16px;">Save frequent pickup and drop-off spots so you don't have to retype them every time.</p>
+        <div id="savedAddressList"><div class="hint">Loading…</div></div>
+        <button class="add-stop" id="addAddressBtn" style="margin-top:8px;">+ Add a new address</button>
+
+        <div id="savedAddressForm" style="display:none;margin-top:18px;padding-top:18px;border-top:1px solid var(--line);">
+          <h3 id="addrFormTitle" style="font-size:15px;margin-bottom:14px;">Add a new address</h3>
+          <div id="addrFormBanner"></div>
+          <div class="field">
+            <label for="addrLabel">Label</label>
+            <input type="text" id="addrLabel" placeholder="e.g. Home, Office, Warehouse">
+          </div>
+          <div class="addr-grid" style="margin-bottom:18px;">
+            <div class="field"><label for="addrName">Name</label><input type="text" id="addrName"></div>
+            <div class="field"><label for="addrContact">Contact number</label><input type="tel" id="addrContact"></div>
+            <div class="field"><label for="addrPostal">Postal code</label><input type="text" id="addrPostal" inputmode="numeric" maxlength="6"></div>
+            <div class="field"><label for="addrUnit">Unit number (optional)</label><input type="text" id="addrUnit"></div>
+            <div class="field full"><label for="addrAddress">Address</label><input type="text" id="addrAddress"></div>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <button class="btn btn-primary" id="saveAddrBtn">Save address</button>
+            <button class="btn btn-ghost" id="cancelAddrBtn">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
 </main>
@@ -289,6 +351,9 @@ let stopPoints = [];        // [{name, contact, postal, unit, address, lat, lng}
 let geocodeTimers = {};
 let scheduleMode = "now";   // "now" | "schedule"
 let tipAmount = 0;
+let savedAddresses = [];
+let editingAddressId = null;
+let addressFormPoint = { lat: null, lng: null }; // temp geocode result while adding/editing a saved address
 
 /* ---------------- Helpers ---------------- */
 function el(id){ return document.getElementById(id); }
@@ -412,6 +477,173 @@ function debounceAddressGeocode(key, errorElId, getPoint){
   }, 600);
 }
 
+/* ---------------- Saved addresses ---------------- */
+async function loadSavedAddresses(){
+  const { data, error } = await sb.from("client_saved_addresses")
+    .select("*").eq("client_id", currentUser.id).order("created_at");
+  if (error){ console.error(error); return; }
+  savedAddresses = data || [];
+  renderSavedAddressList();
+  refreshSavedAddressDropdowns();
+}
+
+function savedAddressOptionsHtml(){
+  return savedAddresses.map(a => `<option value="${a.id}">${a.label}</option>`).join("");
+}
+
+function refreshSavedAddressDropdowns(){
+  const pickupSel = el("pickupSavedSelect");
+  if (pickupSel){
+    pickupSel.innerHTML = `<option value="">Use a saved address (optional)</option>${savedAddressOptionsHtml()}`;
+  }
+  renderStops(); // stop dropdowns are rebuilt as part of the stop template
+}
+
+function applySavedAddressToPoint(addressId, point){
+  if (!addressId) return;
+  const a = savedAddresses.find(x => x.id === addressId);
+  if (!a) return;
+  point.name = a.name || "";
+  point.contact = a.contact || "";
+  point.postal = a.postal || "";
+  point.unit = a.unit || "";
+  point.address = a.address || "";
+  point.lat = a.lat;
+  point.lng = a.lng;
+}
+
+function renderSavedAddressList(){
+  const container = el("savedAddressList");
+  if (!container) return;
+  if (savedAddresses.length === 0){
+    container.innerHTML = `<div class="hint">No saved addresses yet.</div>`;
+    return;
+  }
+  container.innerHTML = savedAddresses.map(a => `
+    <div class="saved-address-card">
+      <div>
+        <div class="label">${a.label}</div>
+        <div class="addr-text">${a.name ? a.name + " · " : ""}${a.address || ""}${a.unit ? ", " + a.unit : ""}${a.postal ? " (" + a.postal + ")" : ""}</div>
+        ${a.contact ? `<div class="addr-text">${a.contact}</div>` : ""}
+      </div>
+      <div class="saved-address-actions">
+        <button class="icon-btn" data-id="${a.id}" data-action="edit">Edit</button>
+        <button class="icon-btn danger" data-id="${a.id}" data-action="delete">Delete</button>
+      </div>
+    </div>
+  `).join("");
+
+  container.querySelectorAll(".icon-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.id;
+      if (btn.dataset.action === "edit") openAddressForm(savedAddresses.find(a => a.id === id));
+      if (btn.dataset.action === "delete") deleteSavedAddress(id);
+    });
+  });
+}
+
+function openAddressForm(address){
+  editingAddressId = address ? address.id : null;
+  addressFormPoint = { lat: address ? address.lat : null, lng: address ? address.lng : null };
+  el("addrFormTitle").textContent = address ? "Edit address" : "Add a new address";
+  el("addrLabel").value = address ? address.label : "";
+  el("addrName").value = address ? (address.name || "") : "";
+  el("addrContact").value = address ? (address.contact || "") : "";
+  el("addrPostal").value = address ? (address.postal || "") : "";
+  el("addrUnit").value = address ? (address.unit || "") : "";
+  el("addrAddress").value = address ? (address.address || "") : "";
+  showBanner("addrFormBanner", null, null);
+  el("savedAddressForm").style.display = "block";
+  el("addAddressBtn").style.display = "none";
+}
+
+function closeAddressForm(){
+  editingAddressId = null;
+  el("savedAddressForm").style.display = "none";
+  el("addAddressBtn").style.display = "inline-flex";
+}
+
+async function saveSavedAddress(){
+  const label = el("addrLabel").value.trim();
+  if (!label){
+    showBanner("addrFormBanner", "err", "Give this address a name, like \"Home\" or \"Warehouse.\"");
+    return;
+  }
+  const payload = {
+    client_id: currentUser.id,
+    label,
+    name: el("addrName").value.trim() || null,
+    contact: el("addrContact").value.trim() || null,
+    postal: el("addrPostal").value.trim() || null,
+    unit: el("addrUnit").value.trim() || null,
+    address: el("addrAddress").value.trim() || null,
+    lat: addressFormPoint.lat,
+    lng: addressFormPoint.lng
+  };
+  let error;
+  if (editingAddressId){
+    ({ error } = await sb.from("client_saved_addresses").update(payload).eq("id", editingAddressId));
+  } else {
+    ({ error } = await sb.from("client_saved_addresses").insert(payload));
+  }
+  if (error){
+    showBanner("addrFormBanner", "err", "Couldn't save: " + error.message);
+    return;
+  }
+  closeAddressForm();
+  loadSavedAddresses();
+}
+
+async function deleteSavedAddress(id){
+  const { error } = await sb.from("client_saved_addresses").delete().eq("id", id);
+  if (error){ alert("Couldn't delete: " + error.message); return; }
+  loadSavedAddresses();
+}
+
+function wireAddressForm(){
+  el("addAddressBtn").addEventListener("click", () => openAddressForm(null));
+  el("cancelAddrBtn").addEventListener("click", closeAddressForm);
+  el("saveAddrBtn").addEventListener("click", saveSavedAddress);
+  el("addrPostal").addEventListener("input", () => {
+    clearTimeout(geocodeTimers["addrForm-postal"]);
+    geocodeTimers["addrForm-postal"] = setTimeout(async () => {
+      const postal = el("addrPostal").value.trim();
+      if (!/^\d{6}$/.test(postal)) return;
+      const result = await geocode(postal);
+      if (result){
+        addressFormPoint.lat = result.lat;
+        addressFormPoint.lng = result.lng;
+        if (result.resolvedAddress) el("addrAddress").value = result.resolvedAddress;
+      }
+    }, 500);
+  });
+}
+
+/* ---------------- Account settings (Profile tab) ---------------- */
+async function loadAccountSettings(){
+  el("acctEmail").value = currentUser.email || "";
+  const { data } = await sb.from("client_profiles").select("full_name, phone").eq("id", currentUser.id).maybeSingle();
+  el("acctFullName").value = data ? (data.full_name || "") : "";
+  el("acctPhone").value = data ? (data.phone || "") : "";
+}
+
+async function saveAccountSettings(){
+  const full_name = el("acctFullName").value.trim();
+  const phone = el("acctPhone").value.trim();
+  if (!full_name || !phone){
+    showBanner("acctBanner", "err", "Name and contact number are required.");
+    return;
+  }
+  el("acctSaveBtn").disabled = true;
+  const { error } = await sb.from("client_profiles").upsert({ id: currentUser.id, full_name, phone });
+  el("acctSaveBtn").disabled = false;
+  if (error){
+    showBanner("acctBanner", "err", "Couldn't save: " + error.message);
+    return;
+  }
+  showBanner("acctBanner", "ok", "Saved.");
+}
+
 /* ---------------- Auth ---------------- */
 async function signInWithGoogle(){
   const { error } = await sb.auth.signInWithOAuth({
@@ -502,8 +734,11 @@ async function initApp(){
   appInitialized = true;
   await loadVehicleRates();
   await loadPlatformFee();
+  await loadSavedAddresses();
   renderStops();
   wireBookingEvents();
+  wireAddressForm();
+  el("acctSaveBtn").addEventListener("click", saveAccountSettings);
 }
 
 async function loadPlatformFee(){
@@ -541,6 +776,10 @@ function renderStops(){
     <div class="addr-block" data-idx="${i}">
       <div class="addr-label">Drop-off ${i + 1}</div>
       ${stopPoints.length > 1 ? `<button class="remove-block" data-idx="${i}" title="Remove this drop-off">&times;</button>` : ""}
+      <select class="saved-select stop-saved-select" data-idx="${i}">
+        <option value="">Use a saved address (optional)</option>
+        ${savedAddressOptionsHtml()}
+      </select>
       <div class="addr-grid">
         <div class="field"><label>Name</label><input type="text" class="stop-name" data-idx="${i}" placeholder="Who's receiving the item" value="${s.name || ""}"></div>
         <div class="field"><label>Contact number</label><input type="tel" class="stop-contact" data-idx="${i}" placeholder="9123 4567" value="${s.contact || ""}"></div>
@@ -554,6 +793,15 @@ function renderStops(){
       </div>
     </div>
   `).join("");
+
+  document.querySelectorAll(".stop-saved-select").forEach(sel => {
+    sel.addEventListener("change", () => {
+      const idx = parseInt(sel.dataset.idx, 10);
+      applySavedAddressToPoint(sel.value, stopPoints[idx]);
+      renderStops();
+      recalcRoute();
+    });
+  });
 
   document.querySelectorAll(".stop-name, .stop-contact, .stop-unit").forEach(inp => {
     inp.addEventListener("input", () => {
@@ -639,6 +887,15 @@ function wirePickupEvents(){
     pickupPoint.address = el("pickupAddress").value;
     debounceAddressGeocode("pickup-address", "pickupError", () => pickupPoint);
   });
+  el("pickupSavedSelect").addEventListener("change", () => {
+    applySavedAddressToPoint(el("pickupSavedSelect").value, pickupPoint);
+    el("pickupName").value = pickupPoint.name || "";
+    el("pickupContact").value = pickupPoint.contact || "";
+    el("pickupPostal").value = pickupPoint.postal || "";
+    el("pickupUnit").value = pickupPoint.unit || "";
+    el("pickupAddress").value = pickupPoint.address || "";
+    recalcRoute();
+  });
 }
 
 function wireScheduleToggle(){
@@ -695,15 +952,19 @@ function wireBookingEvents(){
 
   el("tabBook").addEventListener("click", () => switchTab("book"));
   el("tabHistory").addEventListener("click", () => switchTab("history"));
+  el("tabProfile").addEventListener("click", () => switchTab("profile"));
   el("submitBookingBtn").addEventListener("click", submitBooking);
 }
 
 function switchTab(name){
   el("tabBook").classList.toggle("active", name === "book");
   el("tabHistory").classList.toggle("active", name === "history");
+  el("tabProfile").classList.toggle("active", name === "profile");
   el("panelBook").style.display = name === "book" ? "block" : "none";
   el("panelHistory").style.display = name === "history" ? "block" : "none";
+  el("panelProfile").style.display = name === "profile" ? "block" : "none";
   if (name === "history") loadHistory();
+  if (name === "profile"){ loadAccountSettings(); renderSavedAddressList(); }
 }
 
 /* ---------------- Fare calculation ---------------- */
