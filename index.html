@@ -8,6 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://static.airwallex.com/components/sdk/v1/index.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --mist:#F7FAFD; --white:#FFFFFF; --ink:#0B1A2B; --ink-soft:#445064; --ink-faint:#7C8896;
@@ -195,6 +197,7 @@
       <div class="tab active" id="tabBook" data-tab="book">Book a delivery</div>
       <div class="tab" id="tabHistory" data-tab="history">My bookings</div>
       <div class="tab" id="tabProfile" data-tab="profile">Profile</div>
+      <div class="tab" id="tabBulk" data-tab="bulk">Bulk upload</div>
     </div>
 
     <!-- Booking tab -->
@@ -325,6 +328,34 @@
         </div>
       </div>
     </div>
+
+    <!-- Bulk upload tab -->
+    <div id="panelBulk" style="display:none;">
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:6px;">Bulk upload</h2>
+        <p class="hint" style="margin-bottom:16px;">Have a lot of deliveries at once? Download the template, fill it in (works in Excel or Google Sheets), then upload it back here.</p>
+        <button class="btn btn-ghost btn-block" id="downloadBulkTemplateBtn">⬇ Download template</button>
+        <div class="field" style="margin-top:20px;">
+          <label for="bulkFileInput">Upload filled-in spreadsheet</label>
+          <input type="file" id="bulkFileInput" accept=".xlsx,.xls">
+        </div>
+        <button class="btn btn-primary btn-block" id="uploadBulkBtn">Create bookings from file</button>
+        <p class="hint" id="bulkStatus" style="margin-top:14px;"></p>
+      </div>
+    </div>
+
+    <!-- Payment step: shown after booking (or from My Bookings for an unpaid one) -->
+    <div id="paymentStepPanel" style="display:none;">
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:6px;">Complete payment</h2>
+        <p class="hint" style="margin-bottom:18px;">Enter your card to authorize <span id="paymentAmountText"></span>. You won't be charged until your delivery is complete.</p>
+        <div id="paymentBanner"></div>
+        <div id="dropInContainer" style="min-height:220px;"></div>
+        <div id="paymentDoneRow" style="display:none;margin-top:18px;">
+          <button class="btn btn-primary btn-block" id="paymentDoneBtn">Done</button>
+        </div>
+      </div>
+    </div>
   </div>
 
 </main>
@@ -353,7 +384,9 @@ let scheduleMode = "now";   // "now" | "schedule"
 let tipAmount = 0;
 let savedAddresses = [];
 let editingAddressId = null;
-let addressFormPoint = { lat: null, lng: null }; // temp geocode result while adding/editing a saved address
+let addressFormPoint = { lat: null, lng: null };
+let airwallexInitialized = false;
+let currentDropInElement = null; // temp geocode result while adding/editing a saved address
 
 /* ---------------- Helpers ---------------- */
 function el(id){ return document.getElementById(id); }
@@ -644,6 +677,237 @@ async function saveAccountSettings(){
   showBanner("acctBanner", "ok", "Saved.");
 }
 
+/* ---------------- Payment (Airwallex) ---------------- */
+async function callEdgeFunction(name, body){
+  const { data: { session } } = await sb.auth.getSession();
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${session.access_token}`,
+      "apikey": SUPABASE_ANON_KEY
+    },
+    body: JSON.stringify(body)
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || "Request failed");
+  return json;
+}
+
+async function ensureAirwallexInit(){
+  if (airwallexInitialized) return;
+  await window.AirwallexComponentsSDK.init({ env: "demo", enabledElements: ["payments"] });
+  airwallexInitialized = true;
+}
+
+async function showPaymentStep(bookingId, amount){
+  el("panelBook").style.display = "none";
+  el("panelHistory").style.display = "none";
+  el("panelProfile").style.display = "none";
+  document.querySelector(".tabs").style.display = "none";
+  el("paymentStepPanel").style.display = "block";
+  el("paymentAmountText").textContent = money(amount);
+  el("paymentDoneRow").style.display = "none";
+  el("dropInContainer").innerHTML = "";
+  showBanner("paymentBanner", "info", "Setting up secure payment…");
+
+  if (currentDropInElement){
+    try { currentDropInElement.destroy(); } catch(e){ /* already gone */ }
+    currentDropInElement = null;
+  }
+
+  try{
+    const { client_secret, payment_intent_id } = await callEdgeFunction("create-payment-intent", { booking_id: bookingId });
+    await ensureAirwallexInit();
+    showBanner("paymentBanner", null, null);
+
+    const element = await window.AirwallexComponentsSDK.createElement("dropIn", {
+      intent_id: payment_intent_id,
+      client_secret,
+      currency: "SGD"
+    });
+    currentDropInElement = element;
+    element.mount("dropInContainer");
+
+    element.on("success", async () => {
+      showBanner("paymentBanner", "info", "Confirming with our payment provider…");
+      try{
+        const result = await callEdgeFunction("confirm-payment-status", { booking_id: bookingId });
+        if (result.payment_status === "authorized" || result.payment_status === "captured"){
+          showBanner("paymentBanner", "ok", "Payment authorized! We'll charge your card once your delivery is complete.");
+        } else {
+          showBanner("paymentBanner", "err", "We couldn't confirm the authorization — you can try again from My Bookings.");
+        }
+      } catch(e){
+        showBanner("paymentBanner", "err", "Payment went through, but we couldn't confirm it here. Check My Bookings shortly.");
+      }
+      el("paymentDoneRow").style.display = "block";
+    });
+
+    element.on("error", () => {
+      showBanner("paymentBanner", "err", "That card couldn't be authorized. You can try a different card, or complete payment later from My Bookings.");
+      el("paymentDoneRow").style.display = "block";
+    });
+  } catch(e){
+    showBanner("paymentBanner", "err", "Couldn't set up payment: " + e.message + " — you can try again from My Bookings.");
+    el("paymentDoneRow").style.display = "block";
+  }
+}
+
+function closePaymentStep(){
+  el("paymentStepPanel").style.display = "none";
+  document.querySelector(".tabs").style.display = "flex";
+  switchTab("history");
+}
+
+/* ---------------- Bulk upload ---------------- */
+const BULK_TEMPLATE_HEADERS = ['Booking Reference','Vehicle','Item Description','Date (YYYY-MM-DD, blank = ASAP)','Time (HH:MM)','Tip ($)',
+  'Pickup Name','Pickup Contact Number','Pickup Postal Code','Pickup Unit Number',
+  'Drop Name','Drop Contact Number','Drop Postal Code','Drop Unit Number'];
+
+function sheetRowsFromWorkbook(wb, sheetName){
+  const ws = wb.Sheets[sheetName];
+  if (!ws) return null;
+  const data = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+  if (data.length < 1) return [];
+  return data.slice(1).filter(r => r && r.length && r.some(v => v !== undefined && v !== ""));
+}
+
+function calculateFareForBooking(vehicleRate, distanceKm, additionalStops, tip){
+  const baseFare = Number(vehicleRate.base_fare);
+  const distanceFare = distanceKm * Number(vehicleRate.per_km_rate);
+  const stopFare = additionalStops * Number(vehicleRate.additional_stop_fee);
+  const total = baseFare + distanceFare + stopFare + platformFlatFee + Number(tip || 0);
+  return { baseFare, distanceFare, stopFare, platformFee: platformFlatFee, tip: Number(tip || 0), total };
+}
+
+el("downloadBulkTemplateBtn").addEventListener("click", () => {
+  const wb = XLSX.utils.book_new();
+  const instructions = [
+    ["How to use this template"],
+    [""],
+    ["1. Each ROW is one drop-off. If a booking has more than one drop-off, use the SAME \"Booking Reference\" on multiple rows — they'll be combined into one booking with several stops."],
+    ["2. Booking details (Vehicle, Item Description, Date, Time, Tip, Pickup) only need to be filled in on the FIRST row for each Booking Reference — leave them blank on the extra drop-off rows for that same booking."],
+    ["3. \"Booking Reference\" can be anything (e.g. ORDER1, Batch-A) — it just needs to match across rows belonging to the same booking."],
+    ["4. Vehicle must be exactly one of: " + vehicleRates.map(v => v.vehicle).join(", ") + "."],
+    ["5. Postal codes should be real 6-digit Singapore postal codes — the address is looked up automatically when you upload this back."],
+    ["6. Delete the example rows before adding your own — they're just there to show the format."],
+    ["7. Save the file, then come back to this Bulk upload tab, choose this file, and tap \"Create bookings from file\"."],
+    ["8. Prices are calculated the same way as booking one at a time, and you'll see them in My Bookings once they're created."]
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(instructions), "Instructions");
+  const example = [
+    ["ORDER1","Bike","2 boxes of documents","","","2","Jane Tan","91234567","238801","",
+      "Mr Lee","98765432","560456","#12-01"],
+    ["ORDER2","Car","1 pallet of samples","2026-09-15","14:00","","Jane Tan","91234567","238801","",
+      "Mrs Wong","96543210","520123","#08-45"],
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([BULK_TEMPLATE_HEADERS, ...example]), "Bookings");
+  XLSX.writeFile(wb, "cloudgo-bulk-bookings-template.xlsx");
+});
+
+el("uploadBulkBtn").addEventListener("click", async () => {
+  const fileInput = el("bulkFileInput");
+  const statusEl = el("bulkStatus");
+  const file = fileInput.files[0];
+  if (!file){ statusEl.textContent = "Choose a file first."; return; }
+  statusEl.textContent = "Reading file…";
+
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array", cellDates: true });
+    const rows = sheetRowsFromWorkbook(wb, "Bookings");
+    if (!rows){ statusEl.textContent = "No \"Bookings\" tab found in that file — use the downloaded template."; return; }
+    if (rows.length === 0){ statusEl.textContent = "That tab is empty — add some rows first."; return; }
+
+    const groups = {};
+    const order = [];
+    rows.forEach(r => {
+      const ref = String(r[0] || "").trim();
+      if (!ref) return;
+      if (!groups[ref]){ groups[ref] = { ref, header: r, drops: [] }; order.push(ref); }
+      const [, , , , , , , , , , dName, dContact, dPostal, dUnit] = r;
+      const postal = String(dPostal || "").trim();
+      if (postal || dName || dContact){
+        groups[ref].drops.push({
+          name: String(dName || "").trim(), contact: String(dContact || "").trim(),
+          postal, unit: String(dUnit || "").trim()
+        });
+      }
+    });
+
+    statusEl.textContent = `Found ${order.length} booking(s). Looking up addresses and pricing…`;
+    let created = 0, failed = 0, num = 0;
+    const failedRefs = [];
+
+    for (const ref of order){
+      num++;
+      const g = groups[ref];
+      statusEl.textContent = `Processing booking ${num} of ${order.length} (${ref})…`;
+      const [, vehicleName, description, dateVal, timeVal, tipVal, pName, pContact, pPostal, pUnit] = g.header;
+
+      const vehicleRate = vehicleRates.find(v => v.vehicle.toLowerCase() === String(vehicleName || "").trim().toLowerCase());
+      if (!vehicleRate || g.drops.length === 0){ failed++; failedRefs.push(ref); continue; }
+
+      const pickupGeo = await geocode(String(pPostal || "").trim());
+      if (!pickupGeo){ failed++; failedRefs.push(ref); continue; }
+
+      const dropPoints = [];
+      for (const d of g.drops){
+        const geo = await geocode(d.postal);
+        if (!geo){ continue; }
+        dropPoints.push({ name: d.name || null, contact: d.contact || null, postal: d.postal || null, unit: d.unit || null, address: geo.resolvedAddress, lat: geo.lat, lng: geo.lng });
+      }
+      if (dropPoints.length === 0){ failed++; failedRefs.push(ref); continue; }
+
+      const points = [{ lat: pickupGeo.lat, lng: pickupGeo.lng }, ...dropPoints];
+      const routeResult = await getDrivingDistanceKm(points);
+      const additionalStops = Math.max(0, dropPoints.length - 1);
+      const fare = calculateFareForBooking(vehicleRate, routeResult.km, additionalStops, tipVal);
+
+      let dateStr = "";
+      if (dateVal instanceof Date && !isNaN(dateVal.getTime())){
+        dateStr = dateVal.toISOString().slice(0,10);
+      } else if (dateVal){
+        dateStr = String(dateVal).trim();
+      }
+      const timeStr = String(timeVal || "09:00").trim() || "09:00";
+      const requestedTime = dateStr ? new Date(`${dateStr}T${timeStr}`).toISOString() : null;
+
+      const payload = {
+        client_id: currentUser.id,
+        status: "pending",
+        vehicle: vehicleRate.vehicle,
+        pickup_address: pickupGeo.resolvedAddress,
+        pickup_lat: pickupGeo.lat,
+        pickup_lng: pickupGeo.lng,
+        pickup_contact: { name: pName || null, contact: pContact || null, postal: String(pPostal||"").trim() || null, unit: pUnit || null },
+        dropoff_details: dropPoints,
+        distance_km: routeResult.km,
+        requested_time: requestedTime,
+        notes: String(description || "").trim() || null,
+        quoted_base_fare: fare.baseFare,
+        quoted_distance_fare: fare.distanceFare,
+        quoted_stop_fare: fare.stopFare,
+        quoted_platform_fee: fare.platformFee,
+        tip_amount: fare.tip,
+        quoted_total: fare.total
+      };
+
+      const { error } = await sb.from("client_bookings").insert(payload);
+      if (error){ failed++; failedRefs.push(ref); continue; }
+      created++;
+      statusEl.textContent = `Processed booking ${num} of ${order.length} (${ref}) ✓ — ${created} created so far…`;
+    }
+
+    statusEl.textContent = `Done. ${created} booking${created===1?"":"s"} created${failed>0 ? `, ${failed} failed (${failedRefs.join(", ")}) — check vehicle names and postal codes` : ""}.`;
+    fileInput.value = "";
+  } catch(e){
+    console.error("Bulk upload failed", e);
+    statusEl.textContent = "Something went wrong reading that file: " + e.message;
+  }
+});
+
 /* ---------------- Auth ---------------- */
 async function signInWithGoogle(){
   const { error } = await sb.auth.signInWithOAuth({
@@ -739,6 +1003,7 @@ async function initApp(){
   wireBookingEvents();
   wireAddressForm();
   el("acctSaveBtn").addEventListener("click", saveAccountSettings);
+  el("paymentDoneBtn").addEventListener("click", closePaymentStep);
 }
 
 async function loadPlatformFee(){
@@ -953,6 +1218,7 @@ function wireBookingEvents(){
   el("tabBook").addEventListener("click", () => switchTab("book"));
   el("tabHistory").addEventListener("click", () => switchTab("history"));
   el("tabProfile").addEventListener("click", () => switchTab("profile"));
+  el("tabBulk").addEventListener("click", () => switchTab("bulk"));
   el("submitBookingBtn").addEventListener("click", submitBooking);
 }
 
@@ -960,9 +1226,11 @@ function switchTab(name){
   el("tabBook").classList.toggle("active", name === "book");
   el("tabHistory").classList.toggle("active", name === "history");
   el("tabProfile").classList.toggle("active", name === "profile");
+  el("tabBulk").classList.toggle("active", name === "bulk");
   el("panelBook").style.display = name === "book" ? "block" : "none";
   el("panelHistory").style.display = name === "history" ? "block" : "none";
   el("panelProfile").style.display = name === "profile" ? "block" : "none";
+  el("panelBulk").style.display = name === "bulk" ? "block" : "none";
   if (name === "history") loadHistory();
   if (name === "profile"){ loadAccountSettings(); renderSavedAddressList(); }
 }
@@ -1062,7 +1330,7 @@ async function submitBooking(){
     quoted_total: fare.total
   };
 
-  const { error } = await sb.from("client_bookings").insert(payload);
+  const { data: newBooking, error } = await sb.from("client_bookings").insert(payload).select("id").single();
   btn.disabled = false;
   el("submitBtnText").textContent = "Book this delivery";
 
@@ -1071,7 +1339,8 @@ async function submitBooking(){
     return;
   }
 
-  showBanner("bookBanner", "ok", "Booked! We'll review it and match you with a driver — check My bookings for status.");
+  showBanner("bookBanner", "ok", "Booked! Now let's set up payment — you won't be charged until your delivery is complete.");
+  callEdgeFunction("notify-new-booking", { booking_id: newBooking.id, vehicle: payload.vehicle }).catch(e => console.error("Couldn't notify admins", e));
   // reset form
   selectedVehicle = null;
   currentDistanceKm = null;
@@ -1093,6 +1362,8 @@ async function submitBooking(){
   document.querySelector('.tip-btn[data-amount="0"]').classList.add("active");
   renderStops();
   computeFare();
+
+  showPaymentStep(newBooking.id, fare.total);
 }
 
 /* ---------------- History ---------------- */
@@ -1112,6 +1383,7 @@ async function loadHistory(){
   el("historyList").innerHTML = data.map(b => {
     const stops = (b.dropoff_details || []).map(d => d.address).join(" → ");
     const when = new Date(b.created_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" });
+    const needsPayment = !b.payment_status || b.payment_status === "unpaid" || b.payment_status === "failed";
     return `
       <div class="card booking-card">
         <div>
@@ -1119,6 +1391,7 @@ async function loadHistory(){
           <div class="route">${b.pickup_address} → ${stops}</div>
           ${b.notes ? `<div class="meta">${b.notes}</div>` : ""}
           <div class="meta">Booked ${when}</div>
+          ${needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;" data-pay-id="${b.id}" data-pay-amount="${b.quoted_total}">Complete payment</button>` : `<div class="meta">Payment: ${b.payment_status}</div>`}
         </div>
         <div style="text-align:right;">
           <span class="badge ${b.status}">${b.status}</span>
@@ -1127,6 +1400,12 @@ async function loadHistory(){
       </div>
     `;
   }).join("");
+
+  document.querySelectorAll("[data-pay-id]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      showPaymentStep(btn.dataset.payId, Number(btn.dataset.payAmount));
+    });
+  });
 }
 
 /* ---------------- Boot ---------------- */
