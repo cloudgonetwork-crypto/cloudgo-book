@@ -118,6 +118,10 @@
   .badge.approved{background:#DFF5E8;color:var(--ok);}
   .badge.rejected{background:#FCE4E1;color:var(--danger);}
   .badge.cancelled{background:#EDEFF2;color:var(--ink-faint);}
+  .badge.open{background:#FFF4D6;color:var(--warn);}
+  .badge.assigned{background:#EAF6FA;color:var(--current-deep);}
+  .badge.in_progress{background:#EAF6FA;color:var(--current-deep);}
+  .badge.completed{background:#DFF5E8;color:var(--ok);}
   .price{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:17px;white-space:nowrap;}
   .empty-state{text-align:center;padding:60px 20px;color:var(--ink-faint);}
 
@@ -140,7 +144,7 @@
 
 <nav>
   <div class="inner">
-    <div class="brand"><span class="dot"></span>CloudGo<small>BOOK A DELIVERY</small></div>
+    <div class="brand"><span class="dot"></span>CloudGo<small>BOOK A DELIVERY</small><small id="appVersionLabel" style="margin-left:8px;opacity:0.6;"></small></div>
     <button class="signout" id="signOutBtn" style="display:none;">Sign out</button>
   </div>
 </nav>
@@ -369,6 +373,7 @@
 const SUPABASE_URL = "https://nctegkzmexirmmvvvfsi.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_NeRf8EdEC920z_Mv-fv5cA_3W2noT1J";
 const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // used only if admin_settings can't be read
+const APP_VERSION = "v2026.09.10-1";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -1231,7 +1236,7 @@ function switchTab(name){
   el("panelHistory").style.display = name === "history" ? "block" : "none";
   el("panelProfile").style.display = name === "profile" ? "block" : "none";
   el("panelBulk").style.display = name === "bulk" ? "block" : "none";
-  if (name === "history") loadHistory();
+  if (name === "history"){ loadHistory(); startHistoryPolling(); } else { stopHistoryPolling(); }
   if (name === "profile"){ loadAccountSettings(); renderSavedAddressList(); }
 }
 
@@ -1367,6 +1372,8 @@ async function submitBooking(){
 }
 
 /* ---------------- History ---------------- */
+const DELIVERY_STATUS_LABELS = { open: "Finding a driver", assigned: "Driver assigned", in_progress: "Picked up — on the way", completed: "Delivered", cancelled: "Cancelled" };
+
 async function loadHistory(){
   el("historyList").innerHTML = `<div class="hint">Loading your bookings…</div>`;
   const { data, error } = await sb.from("client_bookings")
@@ -1384,6 +1391,14 @@ async function loadHistory(){
     const stops = (b.dropoff_details || []).map(d => d.address).join(" → ");
     const when = new Date(b.created_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" });
     const needsPayment = !b.payment_status || b.payment_status === "unpaid" || b.payment_status === "failed";
+
+    let badgeClass = b.status, badgeLabel = b.status;
+    if (b.status === "approved"){
+      const js = b.job_status || "open";
+      badgeClass = js;
+      badgeLabel = DELIVERY_STATUS_LABELS[js] || js;
+    }
+
     return `
       <div class="card booking-card">
         <div>
@@ -1391,10 +1406,12 @@ async function loadHistory(){
           <div class="route">${b.pickup_address} → ${stops}</div>
           ${b.notes ? `<div class="meta">${b.notes}</div>` : ""}
           <div class="meta">Booked ${when}</div>
+          ${b.status === "rejected" && b.rejection_reason ? `<div class="meta" style="color:var(--danger);">Reason: ${b.rejection_reason}</div>` : ""}
           ${needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;" data-pay-id="${b.id}" data-pay-amount="${b.quoted_total}">Complete payment</button>` : `<div class="meta">Payment: ${b.payment_status}</div>`}
+          ${b.status === "pending" ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-cancel-id="${b.id}">Cancel booking</button>` : ""}
         </div>
         <div style="text-align:right;">
-          <span class="badge ${b.status}">${b.status}</span>
+          <span class="badge ${badgeClass}">${badgeLabel}</span>
           <div class="price" style="margin-top:10px;">${money(b.quoted_total)}</div>
         </div>
       </div>
@@ -1406,9 +1423,29 @@ async function loadHistory(){
       showPaymentStep(btn.dataset.payId, Number(btn.dataset.payAmount));
     });
   });
+  document.querySelectorAll("[data-cancel-id]").forEach(btn => {
+    btn.addEventListener("click", () => cancelBooking(btn.dataset.cancelId));
+  });
+}
+
+async function cancelBooking(id){
+  if (!confirm("Cancel this booking? This can't be undone.")) return;
+  const { error } = await sb.from("client_bookings").update({ status: "cancelled" }).eq("id", id);
+  if (error){ alert("Couldn't cancel: " + error.message); return; }
+  loadHistory();
+}
+
+let historyPollInterval = null;
+function startHistoryPolling(){
+  stopHistoryPolling();
+  historyPollInterval = setInterval(loadHistory, 20000);
+}
+function stopHistoryPolling(){
+  if (historyPollInterval){ clearInterval(historyPollInterval); historyPollInterval = null; }
 }
 
 /* ---------------- Boot ---------------- */
+el("appVersionLabel").textContent = APP_VERSION;
 el("sendLinkBtn").addEventListener("click", sendMagicLink);
 el("authEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") sendMagicLink(); });
 el("googleSignInBtn").addEventListener("click", signInWithGoogle);
