@@ -1496,7 +1496,7 @@ async function loadHistory(){
   el("historyList").innerHTML = data.map(b => {
     const stops = (b.dropoff_details || []).map(d => d.address).join(" → ");
     const when = new Date(b.created_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" });
-    const needsPayment = !b.payment_status || b.payment_status === "unpaid" || b.payment_status === "failed";
+    const needsPayment = (b.status === "pending" || b.status === "approved") && (!b.payment_status || b.payment_status === "unpaid" || b.payment_status === "failed");
 
     let badgeClass = b.status, badgeLabel = b.status;
     if (b.status === "approved"){
