@@ -334,6 +334,18 @@
           </div>
         </div>
       </div>
+
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:6px;">Payment methods</h2>
+        <p class="hint" style="margin-bottom:16px;">Save a card so you don't have to enter it at every booking. You'll still be asked for your CVC when paying, as a security check.</p>
+        <div id="savedCardList"><div class="hint">Loading…</div></div>
+        <button class="add-stop" id="addCardBtn" style="margin-top:8px;">+ Add a card</button>
+        <div id="addCardForm" style="display:none;margin-top:18px;padding-top:18px;border-top:1px solid var(--line);">
+          <div id="addCardBanner"></div>
+          <div id="dropInCardContainer" style="min-height:220px;"></div>
+          <button class="btn btn-ghost" id="cancelAddCardBtn" style="margin-top:14px;">Cancel</button>
+        </div>
+      </div>
     </div>
 
     <!-- Bulk upload tab -->
@@ -376,7 +388,7 @@
 const SUPABASE_URL = "https://nctegkzmexirmmvvvfsi.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_NeRf8EdEC920z_Mv-fv5cA_3W2noT1J";
 const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // used only if admin_settings can't be read
-const APP_VERSION = "v2026.09.10-1";
+const APP_VERSION = "v2026.09.10-2";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -726,14 +738,16 @@ async function showPaymentStep(bookingId, amount){
   }
 
   try{
-    const { client_secret, payment_intent_id } = await callEdgeFunction("create-payment-intent", { booking_id: bookingId });
+    const { client_secret, payment_intent_id, customer_id } = await callEdgeFunction("create-payment-intent", { booking_id: bookingId });
     await ensureAirwallexInit();
     showBanner("paymentBanner", null, null);
 
     const element = await window.AirwallexComponentsSDK.createElement("dropIn", {
+      mode: "payment",
       intent_id: payment_intent_id,
       client_secret,
-      currency: "SGD"
+      currency: "SGD",
+      customer_id: customer_id || undefined
     });
     currentDropInElement = element;
     element.mount("dropInContainer");
@@ -768,6 +782,85 @@ function closePaymentStep(){
   document.querySelector(".tabs").style.display = "flex";
   switchTab("history");
 }
+
+/* ---------------- Saved cards ---------------- */
+async function loadSavedCards(){
+  el("savedCardList").innerHTML = `<div class="hint">Loading…</div>`;
+  try{
+    const { cards } = await callEdgeFunction("list-saved-cards", {});
+    renderSavedCardList(cards || []);
+  } catch(e){
+    el("savedCardList").innerHTML = `<div class="error-text">Couldn't load saved cards.</div>`;
+  }
+}
+function renderSavedCardList(cards){
+  if (!cards.length){
+    el("savedCardList").innerHTML = `<div class="hint">No saved cards yet.</div>`;
+    return;
+  }
+  el("savedCardList").innerHTML = cards.map(c => `
+    <div class="saved-address-card">
+      <div>
+        <div class="label">${c.brand.charAt(0).toUpperCase() + c.brand.slice(1)} •••• ${c.last4}</div>
+        <div class="addr-text">Expires ${c.expiry_month}/${c.expiry_year}</div>
+      </div>
+      <div class="saved-address-actions">
+        <button class="icon-btn danger" data-consent-id="${c.consent_id}">Remove</button>
+      </div>
+    </div>
+  `).join("");
+  document.querySelectorAll("#savedCardList [data-consent-id]").forEach(btn => {
+    btn.addEventListener("click", () => removeSavedCard(btn.dataset.consentId));
+  });
+}
+async function removeSavedCard(consentId){
+  if (!confirm("Remove this card?")) return;
+  try{
+    await callEdgeFunction("delete-saved-card", { consent_id: consentId });
+    loadSavedCards();
+  } catch(e){
+    alert("Couldn't remove that card: " + e.message);
+  }
+}
+el("addCardBtn").addEventListener("click", async () => {
+  el("addCardForm").style.display = "block";
+  el("addCardBtn").style.display = "none";
+  el("dropInCardContainer").innerHTML = "";
+  showBanner("addCardBanner", "info", "Loading secure card form…");
+  if (currentDropInElement){ try{ currentDropInElement.destroy(); } catch(e){} currentDropInElement = null; }
+  try{
+    const { intent_id, client_secret, customer_id } = await callEdgeFunction("save-card-setup", {});
+    await ensureAirwallexInit();
+    showBanner("addCardBanner", null, null);
+    const element = await window.AirwallexComponentsSDK.createElement("dropIn", {
+      mode: "recurring",
+      intent_id,
+      client_secret,
+      currency: "SGD",
+      customer_id
+    });
+    currentDropInElement = element;
+    element.mount("dropInCardContainer");
+    element.on("success", () => {
+      showBanner("addCardBanner", "ok", "Card saved!");
+      setTimeout(() => {
+        el("addCardForm").style.display = "none";
+        el("addCardBtn").style.display = "inline-flex";
+        loadSavedCards();
+      }, 1200);
+    });
+    element.on("error", () => {
+      showBanner("addCardBanner", "err", "Couldn't save that card — please try again.");
+    });
+  } catch(e){
+    showBanner("addCardBanner", "err", "Couldn't set up card saving: " + e.message);
+  }
+});
+el("cancelAddCardBtn").addEventListener("click", () => {
+  el("addCardForm").style.display = "none";
+  el("addCardBtn").style.display = "inline-flex";
+  if (currentDropInElement){ try{ currentDropInElement.destroy(); } catch(e){} currentDropInElement = null; }
+});
 
 /* ---------------- Bulk upload ---------------- */
 const BULK_TEMPLATE_HEADERS = ['Booking Reference','Vehicle','Item Description','Date (YYYY-MM-DD, blank = ASAP)','Time (HH:MM)','Tip ($)',
@@ -1241,7 +1334,7 @@ function switchTab(name){
   el("panelProfile").style.display = name === "profile" ? "block" : "none";
   el("panelBulk").style.display = name === "bulk" ? "block" : "none";
   if (name === "history"){ loadHistory(); startHistoryPolling(); } else { stopHistoryPolling(); }
-  if (name === "profile"){ loadAccountSettings(); renderSavedAddressList(); }
+  if (name === "profile"){ loadAccountSettings(); renderSavedAddressList(); loadSavedCards(); }
 }
 
 /* ---------------- Fare calculation ---------------- */
