@@ -388,7 +388,7 @@
 const SUPABASE_URL = "https://nctegkzmexirmmvvvfsi.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_NeRf8EdEC920z_Mv-fv5cA_3W2noT1J";
 const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // used only if admin_settings can't be read
-const APP_VERSION = "v2026.09.10-2";
+const APP_VERSION = "v2026.09.10-3";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -1504,6 +1504,7 @@ async function loadHistory(){
       badgeClass = js;
       badgeLabel = DELIVERY_STATUS_LABELS[js] || js;
     }
+    const showPhotos = b.converted_job_id && (b.job_status === "in_progress" || b.job_status === "completed");
 
     return `
       <div class="card booking-card">
@@ -1516,6 +1517,7 @@ async function loadHistory(){
           ${needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;" data-pay-id="${b.id}" data-pay-amount="${b.quoted_total}">Complete payment</button>` : `<div class="meta">Payment: ${b.payment_status}</div>`}
           ${b.status === "pending" && needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-edit-id="${b.id}">Edit</button>` : ""}
           ${b.status === "pending" ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-cancel-id="${b.id}">Cancel booking</button>` : ""}
+          ${showPhotos ? `<div id="booking-photos-${b.id}" style="margin-top:10px;"></div>` : ""}
         </div>
         <div style="text-align:right;">
           <span class="badge ${badgeClass}">${badgeLabel}</span>
@@ -1536,6 +1538,32 @@ async function loadHistory(){
   document.querySelectorAll("[data-edit-id]").forEach(btn => {
     btn.addEventListener("click", () => editBooking(btn.dataset.editId));
   });
+
+  data.filter(b => b.converted_job_id && (b.job_status === "in_progress" || b.job_status === "completed"))
+    .forEach(b => loadBookingPhotos(b.id, b.converted_job_id));
+}
+
+async function getJobPhotoUrl(path){
+  if (!path) return null;
+  try{
+    const { data, error } = await sb.storage.from("job-photos").createSignedUrl(path, 3600);
+    if (error) throw error;
+    return data.signedUrl;
+  } catch(e){ console.error("signed url failed", e); return null; }
+}
+async function loadBookingPhotos(bookingId, jobId){
+  const box = el(`booking-photos-${bookingId}`);
+  if (!box) return;
+  try{
+    const { data: job } = await sb.from("contract_jobs").select("pickup_photo_path, dropoff_photo_path").eq("id", jobId).maybeSingle();
+    if (!job) return;
+    const [pickupUrl, dropoffUrl] = await Promise.all([getJobPhotoUrl(job.pickup_photo_path), getJobPhotoUrl(job.dropoff_photo_path)]);
+    if (!pickupUrl && !dropoffUrl) return;
+    box.innerHTML = `<div style="display:flex;gap:8px;">
+      ${pickupUrl ? `<a href="${pickupUrl}" target="_blank"><img src="${pickupUrl}" style="width:56px;height:56px;object-fit:cover;border-radius:6px;" title="Pickup photo"></a>` : ""}
+      ${dropoffUrl ? `<a href="${dropoffUrl}" target="_blank"><img src="${dropoffUrl}" style="width:56px;height:56px;object-fit:cover;border-radius:6px;" title="Drop-off photo"></a>` : ""}
+    </div>`;
+  } catch(e){ console.error("Couldn't load booking photos", e); }
 }
 
 async function cancelBooking(id){
