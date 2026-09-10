@@ -829,12 +829,11 @@ el("addCardBtn").addEventListener("click", async () => {
   showBanner("addCardBanner", "info", "Loading secure card form…");
   if (currentDropInElement){ try{ currentDropInElement.destroy(); } catch(e){} currentDropInElement = null; }
   try{
-    const { intent_id, client_secret, customer_id } = await callEdgeFunction("save-card-setup", {});
+    const { client_secret, customer_id } = await callEdgeFunction("save-card-setup", {});
     await ensureAirwallexInit();
     showBanner("addCardBanner", null, null);
     const element = await window.AirwallexComponentsSDK.createElement("dropIn", {
       mode: "recurring",
-      intent_id,
       client_secret,
       currency: "SGD",
       customer_id
