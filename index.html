@@ -1359,7 +1359,7 @@ function computeFare(){
   const distanceFare = distKm * Number(selectedVehicle.per_km_rate);
   const stopFare = additionalStops * Number(selectedVehicle.additional_stop_fee);
   const tripFare = baseFare + distanceFare + stopFare;
-  const total = tripFare + platformFlatFee + tipAmount;
+  const total = Math.round((tripFare + platformFlatFee + tipAmount) * 100) / 100;
 
   const distanceNote = currentDistanceSource === "straight-line"
     ? "Driving route unavailable right now, so this uses a straight-line distance estimate. "
