@@ -206,6 +206,9 @@
 
     <!-- Booking tab -->
     <div id="panelBook">
+      <div class="banner info" id="editModeNotice" style="display:none;margin-bottom:20px;">
+        Editing your booking. <button class="btn btn-ghost btn-sm" id="cancelEditBtn" style="margin-left:10px;">Cancel edit</button>
+      </div>
       <div class="card">
         <h2 style="font-size:19px;margin-bottom:16px;">1. Choose a vehicle</h2>
         <div class="vehicle-grid" id="vehicleGrid"><div class="hint">Loading rates…</div></div>
@@ -389,6 +392,7 @@ let scheduleMode = "now";   // "now" | "schedule"
 let tipAmount = 0;
 let savedAddresses = [];
 let editingAddressId = null;
+let editingBookingId = null;
 let addressFormPoint = { lat: null, lng: null };
 let airwallexInitialized = false;
 let currentDropInElement = null; // temp geocode result while adding/editing a saved address
@@ -1305,7 +1309,7 @@ async function submitBooking(){
 
   const btn = el("submitBookingBtn");
   btn.disabled = true;
-  el("submitBtnText").innerHTML = '<span class="spinner"></span> Booking…';
+  el("submitBtnText").innerHTML = `<span class="spinner"></span> ${editingBookingId ? "Saving…" : "Booking…"}`;
 
   const payload = {
     client_id: currentUser.id,
@@ -1335,17 +1339,27 @@ async function submitBooking(){
     quoted_total: fare.total
   };
 
-  const { data: newBooking, error } = await sb.from("client_bookings").insert(payload).select("id").single();
+  const wasEditing = !!editingBookingId;
+  const query = wasEditing
+    ? sb.from("client_bookings").update(payload).eq("id", editingBookingId).select("id").single()
+    : sb.from("client_bookings").insert(payload).select("id").single();
+  const { data: newBooking, error } = await query;
   btn.disabled = false;
   el("submitBtnText").textContent = "Book this delivery";
 
   if (error){
-    showBanner("bookBanner", "err", "Couldn't submit your booking: " + error.message);
+    showBanner("bookBanner", "err", (wasEditing ? "Couldn't save your changes: " : "Couldn't submit your booking: ") + error.message);
     return;
   }
 
-  showBanner("bookBanner", "ok", "Booked! Now let's set up payment — you won't be charged until your delivery is complete.");
-  callEdgeFunction("notify-new-booking", { booking_id: newBooking.id, vehicle: payload.vehicle }).catch(e => console.error("Couldn't notify admins", e));
+  showBanner("bookBanner", "ok", wasEditing
+    ? "Changes saved! Setting up payment…"
+    : "Booked! Now let's set up payment — you won't be charged until your delivery is complete.");
+  if (!wasEditing){
+    callEdgeFunction("notify-new-booking", { booking_id: newBooking.id, vehicle: payload.vehicle }).catch(e => console.error("Couldn't notify admins", e));
+  }
+  editingBookingId = null;
+  el("editModeNotice").style.display = "none";
   // reset form
   selectedVehicle = null;
   currentDistanceKm = null;
@@ -1408,6 +1422,7 @@ async function loadHistory(){
           <div class="meta">Booked ${when}</div>
           ${b.status === "rejected" && b.rejection_reason ? `<div class="meta" style="color:var(--danger);">Reason: ${b.rejection_reason}</div>` : ""}
           ${needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;" data-pay-id="${b.id}" data-pay-amount="${b.quoted_total}">Complete payment</button>` : `<div class="meta">Payment: ${b.payment_status}</div>`}
+          ${b.status === "pending" && needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-edit-id="${b.id}">Edit</button>` : ""}
           ${b.status === "pending" ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-cancel-id="${b.id}">Cancel booking</button>` : ""}
         </div>
         <div style="text-align:right;">
@@ -1426,6 +1441,9 @@ async function loadHistory(){
   document.querySelectorAll("[data-cancel-id]").forEach(btn => {
     btn.addEventListener("click", () => cancelBooking(btn.dataset.cancelId));
   });
+  document.querySelectorAll("[data-edit-id]").forEach(btn => {
+    btn.addEventListener("click", () => editBooking(btn.dataset.editId));
+  });
 }
 
 async function cancelBooking(id){
@@ -1434,6 +1452,62 @@ async function cancelBooking(id){
   if (error){ alert("Couldn't cancel: " + error.message); return; }
   loadHistory();
 }
+
+async function editBooking(id){
+  const { data: b, error } = await sb.from("client_bookings").select("*").eq("id", id).single();
+  if (error || !b){ alert("Couldn't load that booking: " + (error ? error.message : "not found")); return; }
+
+  editingBookingId = id;
+  el("editModeNotice").style.display = "block";
+  switchTab("book");
+
+  selectedVehicle = vehicleRates.find(v => v.vehicle === b.vehicle) || null;
+  document.querySelectorAll(".vehicle-card").forEach(c => c.classList.toggle("selected", c.dataset.vehicle === b.vehicle));
+
+  const pc = b.pickup_contact || {};
+  pickupPoint = { name: pc.name || "", contact: pc.contact || "", postal: pc.postal || "", unit: pc.unit || "", address: b.pickup_address || "", lat: b.pickup_lat, lng: b.pickup_lng };
+  el("pickupName").value = pickupPoint.name;
+  el("pickupContact").value = pickupPoint.contact;
+  el("pickupPostal").value = pickupPoint.postal;
+  el("pickupUnit").value = pickupPoint.unit;
+  el("pickupAddress").value = pickupPoint.address;
+
+  stopPoints = (b.dropoff_details || []).map(d => ({ name: d.name || "", contact: d.contact || "", postal: d.postal || "", unit: d.unit || "", address: d.address || "", lat: d.lat, lng: d.lng }));
+  if (stopPoints.length === 0) stopPoints = [{ name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null }];
+  renderStops();
+
+  el("descriptionInput").value = b.notes || "";
+
+  if (b.requested_time){
+    scheduleMode = "schedule";
+    el("scheduleLaterBtn").classList.add("active");
+    el("scheduleNowBtn").classList.remove("active");
+    el("requestedTime").style.display = "block";
+    const d = new Date(b.requested_time);
+    const pad = n => String(n).padStart(2, "0");
+    el("requestedTime").value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } else {
+    scheduleMode = "now";
+    el("scheduleNowBtn").classList.add("active");
+    el("scheduleLaterBtn").classList.remove("active");
+    el("requestedTime").style.display = "none";
+  }
+
+  tipAmount = Number(b.tip_amount) || 0;
+  document.querySelectorAll(".tip-btn").forEach(btn => btn.classList.remove("active"));
+  const presetBtn = document.querySelector(`.tip-btn[data-amount="${tipAmount}"]`);
+  if (presetBtn){ presetBtn.classList.add("active"); el("tipCustomInput").style.display = "none"; }
+  else{ el("tipCustomBtn").classList.add("active"); el("tipCustomInput").style.display = "block"; el("tipCustomInput").value = tipAmount; }
+
+  currentDistanceKm = b.distance_km;
+  currentDistanceSource = "driving";
+  computeFare();
+}
+el("cancelEditBtn").addEventListener("click", () => {
+  editingBookingId = null;
+  el("editModeNotice").style.display = "none";
+  switchTab("history");
+});
 
 let historyPollInterval = null;
 function startHistoryPolling(){
