@@ -244,6 +244,9 @@
       <div class="banner info" id="editModeNotice" style="display:none;margin-bottom:20px;">
         Editing your booking. <button class="btn btn-ghost btn-sm" id="cancelEditBtn" style="margin-left:10px;">Cancel edit</button>
       </div>
+      <div class="banner info" id="reorderNotice" style="display:none;margin-bottom:20px;">
+        Details loaded from a previous delivery — review everything below (especially the date/time), then book. <button class="btn btn-ghost btn-sm" id="dismissReorderBtn" style="margin-left:10px;">Dismiss</button>
+      </div>
       <div class="card">
         <h2 style="font-size:19px;margin-bottom:16px;">1. Choose a vehicle</h2>
         <div class="vehicle-grid" id="vehicleGrid"><div class="hint">Loading rates…</div></div>
@@ -1637,6 +1640,7 @@ async function submitBooking(){
   }
   editingBookingId = null;
   el("editModeNotice").style.display = "none";
+  el("reorderNotice").style.display = "none";
   // reset form
   selectedVehicle = null;
   currentDistanceKm = null;
@@ -1702,6 +1706,7 @@ async function loadHistory(){
           ${needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;" data-pay-id="${b.id}" data-pay-amount="${b.quoted_total}">Complete payment</button>` : `<div class="meta">Payment: ${b.payment_status}</div>`}
           ${b.status === "pending" && needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-edit-id="${b.id}">Edit</button>` : ""}
           ${b.status === "pending" ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-cancel-id="${b.id}">Cancel booking</button>` : ""}
+          <button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-reorder-id="${b.id}">Book again</button>
           ${showPhotos ? `<div id="booking-photos-${b.id}" style="margin-top:10px;"></div>` : ""}
         </div>
         <div style="text-align:right;">
@@ -1722,6 +1727,9 @@ async function loadHistory(){
   });
   document.querySelectorAll("[data-edit-id]").forEach(btn => {
     btn.addEventListener("click", () => editBooking(btn.dataset.editId));
+  });
+  document.querySelectorAll("[data-reorder-id]").forEach(btn => {
+    btn.addEventListener("click", () => reorderBooking(btn.dataset.reorderId));
   });
 
   data.filter(b => b.converted_job_id && (b.job_status === "in_progress" || b.job_status === "completed"))
@@ -1764,6 +1772,7 @@ async function editBooking(id){
 
   editingBookingId = id;
   el("editModeNotice").style.display = "block";
+  el("reorderNotice").style.display = "none";
   switchTab("book");
 
   selectedVehicle = vehicleRates.find(v => v.vehicle === b.vehicle) || null;
@@ -1812,6 +1821,61 @@ el("cancelEditBtn").addEventListener("click", () => {
   editingBookingId = null;
   el("editModeNotice").style.display = "none";
   switchTab("history");
+});
+
+/* ---------------- Reorder (book the same job again) ---------------- */
+// Same idea as editBooking() above, but this always creates a brand-new
+// booking — editingBookingId is left null so submitBooking() inserts
+// instead of updating. Handy for a client's regular runs (same customer /
+// another of their outlets) without retyping addresses each time.
+async function reorderBooking(id){
+  const { data: b, error } = await sb.from("client_bookings").select("*").eq("id", id).single();
+  if (error || !b){ alert("Couldn't load that booking: " + (error ? error.message : "not found")); return; }
+
+  editingBookingId = null;
+  el("editModeNotice").style.display = "none";
+  el("reorderNotice").style.display = "block";
+  switchTab("book");
+
+  selectedVehicle = vehicleRates.find(v => v.vehicle === b.vehicle) || null;
+  document.querySelectorAll(".vehicle-card").forEach(c => c.classList.toggle("selected", c.dataset.vehicle === b.vehicle));
+
+  const pc = b.pickup_contact || {};
+  pickupPoint = { name: pc.name || "", contact: pc.contact || "", postal: pc.postal || "", unit: pc.unit || "", address: b.pickup_address || "", lat: b.pickup_lat, lng: b.pickup_lng };
+  el("pickupName").value = pickupPoint.name;
+  el("pickupContact").value = pickupPoint.contact;
+  el("pickupPostal").value = pickupPoint.postal;
+  el("pickupUnit").value = pickupPoint.unit;
+  el("pickupAddress").value = pickupPoint.address;
+
+  stopPoints = (b.dropoff_details || []).map(d => ({ name: d.name || "", contact: d.contact || "", postal: d.postal || "", unit: d.unit || "", address: d.address || "", lat: d.lat, lng: d.lng }));
+  if (stopPoints.length === 0) stopPoints = [{ name:"", contact:"", postal:"", unit:"", address:"", lat:null, lng:null }];
+  renderStops();
+
+  el("descriptionInput").value = b.notes || "";
+
+  // Always start a reorder as "as soon as possible" — the original booking's
+  // date/time is in the past, so reusing it verbatim would just be wrong.
+  scheduleMode = "now";
+  el("scheduleNowBtn").classList.add("active");
+  el("scheduleLaterBtn").classList.remove("active");
+  el("requestedTime").style.display = "none";
+  el("requestedTime").value = "";
+  el("scheduleError").style.display = "none";
+
+  // Tip is a per-delivery decision, so don't silently carry it over.
+  tipAmount = 0;
+  document.querySelectorAll(".tip-btn").forEach(btn => btn.classList.remove("active"));
+  document.querySelector('.tip-btn[data-amount="0"]').classList.add("active");
+  el("tipCustomInput").style.display = "none";
+  el("tipCustomInput").value = "";
+
+  currentDistanceKm = b.distance_km;
+  currentDistanceSource = "driving";
+  computeFare();
+}
+el("dismissReorderBtn").addEventListener("click", () => {
+  el("reorderNotice").style.display = "none";
 });
 
 let historyPollInterval = null;
