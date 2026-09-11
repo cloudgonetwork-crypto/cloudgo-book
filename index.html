@@ -31,6 +31,26 @@
   .brand small{font-family:'JetBrains Mono',monospace;font-weight:500;font-size:11px;color:var(--ink-faint);letter-spacing:0.02em;margin-left:6px;}
   .signout{font-size:13px;font-weight:600;color:var(--ink-soft);cursor:pointer;background:none;border:none;padding:8px 4px;}
   .signout:hover{color:var(--current-deep);}
+  .nav-actions{display:flex;align-items:center;gap:4px;}
+  .bell-btn{position:relative;background:none;border:none;cursor:pointer;padding:8px;font-size:19px;line-height:1;color:var(--ink-soft);display:none;}
+  .bell-btn:hover{color:var(--current-deep);}
+  .bell-badge{position:absolute;top:3px;right:3px;background:var(--danger);color:#fff;font-size:10px;font-weight:700;line-height:1;padding:3px 5px;border-radius:10px;min-width:16px;text-align:center;display:none;}
+  .notif-backdrop{display:none;position:fixed;inset:0;background:rgba(11,26,43,0.35);z-index:200;align-items:flex-start;justify-content:center;padding:70px 16px 16px;}
+  .notif-backdrop.open{display:flex;}
+  .notif-panel{background:var(--white);border-radius:16px;max-width:420px;width:100%;max-height:min(70vh,560px);display:flex;flex-direction:column;box-shadow:0 20px 50px -12px rgba(11,26,43,0.35);}
+  .notif-panel-head{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--line);}
+  .notif-panel-head h3{font-size:16px;}
+  .notif-panel-close{background:none;border:none;cursor:pointer;font-size:20px;color:var(--ink-faint);padding:4px;line-height:1;}
+  .notif-panel-close:hover{color:var(--ink);}
+  .notif-list{overflow-y:auto;padding:8px 10px;}
+  .notif-item{padding:12px 10px;border-radius:10px;}
+  .notif-item.unread{background:#EAF6FA;}
+  .notif-item .title{font-size:13.5px;font-weight:700;margin-bottom:3px;}
+  .notif-item .msg{font-size:12.5px;color:var(--ink-soft);line-height:1.45;margin-bottom:4px;}
+  .notif-item .when{font-size:11px;color:var(--ink-faint);}
+  .notif-empty{text-align:center;padding:40px 20px;color:var(--ink-faint);font-size:13.5px;}
+  .switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0;}
+  .switch-row label{margin:0;font-size:14.5px;font-weight:700;color:var(--ink);}
 
   main{padding:44px 0 80px;}
 
@@ -147,9 +167,22 @@
 <nav>
   <div class="inner">
     <div class="brand"><span class="dot"></span>CloudGo<small>BOOK A DELIVERY</small><small id="appVersionLabel" style="margin-left:8px;opacity:0.6;"></small></div>
-    <button class="signout" id="signOutBtn" style="display:none;">Sign out</button>
+    <div class="nav-actions">
+      <button class="bell-btn" id="bellBtn" aria-label="Notifications">🔔<span class="bell-badge" id="bellBadge"></span></button>
+      <button class="signout" id="signOutBtn" style="display:none;">Sign out</button>
+    </div>
   </div>
 </nav>
+
+<div class="notif-backdrop" id="notifBackdrop">
+  <div class="notif-panel">
+    <div class="notif-panel-head">
+      <h3>Notifications</h3>
+      <button class="notif-panel-close" id="notifCloseBtn">&times;</button>
+    </div>
+    <div class="notif-list" id="notifList"><div class="notif-empty">No notifications yet.</div></div>
+  </div>
+</div>
 
 <main>
 
@@ -311,6 +344,14 @@
       </div>
 
       <div class="card">
+        <h2 style="font-size:19px;margin-bottom:16px;">Notifications</h2>
+        <div class="switch-row">
+          <label for="notifSoundToggle">Play a sound for new notifications</label>
+          <input type="checkbox" id="notifSoundToggle" style="width:18px;height:18px;">
+        </div>
+      </div>
+
+      <div class="card">
         <h2 style="font-size:19px;margin-bottom:6px;">Saved addresses</h2>
         <p class="hint" style="margin-bottom:16px;">Save frequent pickup and drop-off spots so you don't have to retype them every time.</p>
         <div id="savedAddressList"><div class="hint">Loading…</div></div>
@@ -428,6 +469,101 @@ function showToast(message){
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.style.display = "none"; }, 5000);
 }
+
+/* ---------------- Notifications ----------------
+   Reuses the same "notifications" / "notification_reads" tables the driver
+   app already uses — RLS already lets a signed-in user read notifications
+   addressed to their own auth.uid(), so no server-side changes were needed
+   to make this work for clients too. */
+const NOTIF_SOUND_KEY = "cg_notif_sound_enabled";
+function notifSoundEnabled(){
+  const v = localStorage.getItem(NOTIF_SOUND_KEY);
+  return v === null ? true : v === "1";
+}
+function setNotifSoundEnabled(on){
+  try{ localStorage.setItem(NOTIF_SOUND_KEY, on ? "1" : "0"); }catch(e){}
+}
+function playNotifSound(){
+  if (!notifSoundEnabled()) return;
+  try{
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.type = "sine"; o.frequency.value = 880;
+    g.gain.setValueAtTime(0.001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.16, ctx.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    o.start();
+    o.stop(ctx.currentTime + 0.42);
+    o.onended = () => { try{ ctx.close(); }catch(e){} };
+  } catch(e){ console.error("notif sound failed", e); }
+}
+
+let userNotifications = [];
+let userReadIds = new Set();
+let notifSoundReady = false; // don't play the sound for notifications that already existed on first load
+let lastSeenUnreadIds = new Set();
+
+async function loadNotifications(){
+  if (!currentUser) return;
+  try{
+    const { data, error } = await sb.from("notifications").select("*")
+      .or(`user_id.is.null,user_id.eq.${currentUser.id}`)
+      .order("created_at", { ascending: false }).limit(50);
+    if (error) throw error;
+    userNotifications = data || [];
+    const { data: reads } = await sb.from("notification_reads").select("notification_id").eq("user_id", currentUser.id);
+    userReadIds = new Set((reads || []).map(r => r.notification_id));
+    const nowUnreadIds = new Set(userNotifications.filter(n => !userReadIds.has(n.id)).map(n => n.id));
+    if (notifSoundReady){
+      const hasNew = [...nowUnreadIds].some(id => !lastSeenUnreadIds.has(id));
+      if (hasNew) playNotifSound();
+    }
+    notifSoundReady = true;
+    lastSeenUnreadIds = nowUnreadIds;
+    updateBellBadge();
+  } catch(e){ console.error("failed to load notifications", e); }
+}
+function updateBellBadge(){
+  const unread = userNotifications.filter(n => !userReadIds.has(n.id)).length;
+  const badge = el("bellBadge");
+  if (unread > 0){ badge.textContent = unread; badge.style.display = "block"; }
+  else { badge.style.display = "none"; }
+}
+function renderNotificationsList(){
+  const box = el("notifList");
+  if (userNotifications.length === 0){ box.innerHTML = `<div class="notif-empty">No notifications yet.</div>`; return; }
+  box.innerHTML = userNotifications.map(n => {
+    const isUnread = !userReadIds.has(n.id);
+    return `<div class="notif-item${isUnread ? " unread" : ""}">
+      <div class="title">${isUnread ? "🔵 " : ""}${n.title}</div>
+      ${n.message ? `<div class="msg">${n.message}</div>` : ""}
+      <div class="when">${new Date(n.created_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" })}</div>
+    </div>`;
+  }).join("");
+}
+async function markAllNotificationsRead(){
+  if (!currentUser) return;
+  const unread = userNotifications.filter(n => !userReadIds.has(n.id));
+  if (unread.length === 0) return;
+  try{
+    await sb.from("notification_reads").upsert(unread.map(n => ({ notification_id: n.id, user_id: currentUser.id })));
+    unread.forEach(n => userReadIds.add(n.id));
+    updateBellBadge();
+  } catch(e){ console.error("failed to mark notifications read", e); }
+}
+let notifPollInterval = null;
+function startNotifPolling(){
+  stopNotifPolling();
+  loadNotifications();
+  notifPollInterval = setInterval(loadNotifications, 20000);
+}
+function stopNotifPolling(){
+  if (notifPollInterval){ clearInterval(notifPollInterval); notifPollInterval = null; }
+}
+
 function haversineKm(lat1, lng1, lat2, lng2){
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -1137,6 +1273,8 @@ function showScreen(name){
   el("profileScreen").style.display = name === "profile" ? "block" : "none";
   el("appScreen").style.display = name === "app" ? "block" : "none";
   el("signOutBtn").style.display = name === "app" || name === "profile" ? "inline-block" : "none";
+  el("bellBtn").style.display = name === "app" ? "inline-flex" : "none";
+  if (name === "app") startNotifPolling(); else stopNotifPolling();
 }
 
 /* ---------------- App init ---------------- */
@@ -1692,6 +1830,17 @@ el("authEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") send
 el("googleSignInBtn").addEventListener("click", signInWithGoogle);
 el("saveProfileBtn").addEventListener("click", saveProfile);
 el("signOutBtn").addEventListener("click", signOut);
+
+el("bellBtn").addEventListener("click", async () => {
+  renderNotificationsList();
+  el("notifBackdrop").classList.add("open");
+  await markAllNotificationsRead();
+  renderNotificationsList();
+});
+el("notifCloseBtn").addEventListener("click", () => el("notifBackdrop").classList.remove("open"));
+el("notifBackdrop").addEventListener("click", (e) => { if (e.target === el("notifBackdrop")) el("notifBackdrop").classList.remove("open"); });
+el("notifSoundToggle").checked = notifSoundEnabled();
+el("notifSoundToggle").addEventListener("change", () => setNotifSoundEnabled(el("notifSoundToggle").checked));
 
 sb.auth.onAuthStateChange((event, session) => {
   if (session && session.user){
