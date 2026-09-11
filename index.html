@@ -133,6 +133,8 @@
   .spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
 
+  #cgToast{position:fixed;left:50%;top:18px;transform:translateX(-50%);background:#12293b;color:#fff;padding:13px 20px;border-radius:11px;font-size:13.5px;font-weight:600;box-shadow:0 10px 28px -6px rgba(11,26,43,0.45);z-index:9999;max-width:min(90vw,420px);text-align:center;line-height:1.5;display:none;}
+
   @media (max-width:560px){
     .vehicle-grid{grid-template-columns:1fr;}
     .card{padding:20px;}
@@ -337,7 +339,7 @@
 
       <div class="card">
         <h2 style="font-size:19px;margin-bottom:6px;">Payment methods</h2>
-        <p class="hint" style="margin-bottom:16px;">Save a card so you don't have to enter it at every booking. You'll still be asked for your CVC when paying, as a security check.</p>
+        <p class="hint" style="margin-bottom:16px;">Save a card and future bookings are charged automatically — no payment screen, no re-entering your card. (First time you use a new card, we'll still ask you to confirm it once.)</p>
         <div id="savedCardList"><div class="hint">Loading…</div></div>
         <button class="add-stop" id="addCardBtn" style="margin-top:8px;">+ Add a card</button>
         <div id="addCardForm" style="display:none;margin-top:18px;padding-top:18px;border-top:1px solid var(--line);">
@@ -363,7 +365,8 @@
       </div>
     </div>
 
-    <!-- Payment step: shown after booking (or from My Bookings for an unpaid one) -->
+    <!-- Payment step: shown after booking (or from My Bookings for an unpaid one) — only when we
+         couldn't auto-charge a saved card, see startPaymentFlow() -->
     <div id="paymentStepPanel" style="display:none;">
       <div class="card">
         <h2 style="font-size:19px;margin-bottom:6px;">Complete payment</h2>
@@ -379,6 +382,8 @@
 
 </main>
 
+<div id="cgToast"></div>
+
 <script>
 /* ==================================================================
    CONFIG — fill these in with the SAME values used in cloudgo-webapp
@@ -388,7 +393,7 @@
 const SUPABASE_URL = "https://nctegkzmexirmmvvvfsi.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_NeRf8EdEC920z_Mv-fv5cA_3W2noT1J";
 const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // used only if admin_settings can't be read
-const APP_VERSION = "v2026.09.10-3";
+const APP_VERSION = "v2026.09.11-1";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -414,6 +419,14 @@ function el(id){ return document.getElementById(id); }
 function money(n){ return "$" + Number(n || 0).toFixed(2); }
 function showBanner(containerId, type, msg){
   el(containerId).innerHTML = msg ? `<div class="banner ${type}">${msg}</div>` : "";
+}
+let toastTimer = null;
+function showToast(message){
+  const t = el("cgToast");
+  t.textContent = message;
+  t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.display = "none"; }, 5000);
 }
 function haversineKm(lat1, lng1, lat2, lng2){
   const R = 6371;
@@ -721,7 +734,33 @@ async function ensureAirwallexInit(){
   airwallexInitialized = true;
 }
 
-async function showPaymentStep(bookingId, amount){
+// Called right after a booking is created, and from the "Complete payment" button
+// in My Bookings. create-payment-intent tries a silent charge against a saved,
+// merchant-triggerable card first (see save-card-setup's "Add a card" flow below);
+// if that goes through, there's nothing more for the client to do. If not — no
+// saved card yet, or the silent attempt didn't authorize — we fall back to the
+// normal card-entry step exactly as before.
+async function startPaymentFlow(bookingId, amount){
+  let intentResult;
+  try{
+    intentResult = await callEdgeFunction("create-payment-intent", { booking_id: bookingId });
+  } catch(e){
+    showToast("Couldn't set up payment: " + e.message + " — you can try again from My Bookings.");
+    loadHistory();
+    return;
+  }
+
+  if (intentResult.auto_authorized){
+    showToast(`Booked! We'll charge ${intentResult.card_display || "your card on file"} once your delivery is complete.`);
+    try{ await callEdgeFunction("confirm-payment-status", { booking_id: bookingId }); } catch(e){ console.error("Couldn't persist auto-charge confirmation", e); }
+    loadHistory();
+    return;
+  }
+
+  showPaymentStep(bookingId, amount, intentResult);
+}
+
+async function showPaymentStep(bookingId, amount, prefetchedIntent){
   el("panelBook").style.display = "none";
   el("panelHistory").style.display = "none";
   el("panelProfile").style.display = "none";
@@ -738,7 +777,7 @@ async function showPaymentStep(bookingId, amount){
   }
 
   try{
-    const { client_secret, payment_intent_id, customer_id } = await callEdgeFunction("create-payment-intent", { booking_id: bookingId });
+    const { client_secret, payment_intent_id, customer_id } = prefetchedIntent || await callEdgeFunction("create-payment-intent", { booking_id: bookingId });
     await ensureAirwallexInit();
     showBanner("paymentBanner", null, null);
 
@@ -836,7 +875,15 @@ el("addCardBtn").addEventListener("click", async () => {
       mode: "recurring",
       client_secret,
       currency: "SGD",
-      customer_id
+      customer_id,
+      // Marks the saved card as usable for us to charge automatically later
+      // (booking day, no CVC, no screen) rather than only when the client is
+      // actively present re-entering it. "unscheduled" because the amount and
+      // timing depend on whatever they book next, not a fixed subscription.
+      payment_consent: {
+        next_triggered_by: "merchant",
+        merchant_trigger_reason: "unscheduled"
+      }
     });
     currentDropInElement = element;
     element.mount("dropInCardContainer");
@@ -1445,8 +1492,8 @@ async function submitBooking(){
   }
 
   showBanner("bookBanner", "ok", wasEditing
-    ? "Changes saved! Setting up payment…"
-    : "Booked! Now let's set up payment — you won't be charged until your delivery is complete.");
+    ? "Changes saved! Finishing up…"
+    : "Booked! Finishing up…");
   if (!wasEditing){
     callEdgeFunction("notify-new-booking", { booking_id: newBooking.id, vehicle: payload.vehicle }).catch(e => console.error("Couldn't notify admins", e));
   }
@@ -1474,7 +1521,7 @@ async function submitBooking(){
   renderStops();
   computeFare();
 
-  showPaymentStep(newBooking.id, fare.total);
+  startPaymentFlow(newBooking.id, fare.total);
 }
 
 /* ---------------- History ---------------- */
@@ -1529,7 +1576,7 @@ async function loadHistory(){
 
   document.querySelectorAll("[data-pay-id]").forEach(btn => {
     btn.addEventListener("click", () => {
-      showPaymentStep(btn.dataset.payId, Number(btn.dataset.payAmount));
+      startPaymentFlow(btn.dataset.payId, Number(btn.dataset.payAmount));
     });
   });
   document.querySelectorAll("[data-cancel-id]").forEach(btn => {
