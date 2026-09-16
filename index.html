@@ -12,6 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <style>
   :root{
     --mist:#F7FAFD; --white:#FFFFFF; --ink:#0B1A2B; --ink-soft:#445064; --ink-faint:#7C8896;
@@ -422,8 +423,15 @@
       </div>
       <div class="card" id="paynowHandoffCard" style="display:none;">
         <h2 style="font-size:19px;margin-bottom:6px;">Pay via PayNow</h2>
-        <p class="hint" style="margin-bottom:18px;" id="paynowHandoffText"></p>
-        <a class="btn btn-primary btn-block" id="paynowWhatsappLink" target="_blank" rel="noopener">Message us on WhatsApp</a>
+        <p class="hint" style="margin-bottom:14px;" id="paynowHandoffText"></p>
+        <div style="display:flex;justify-content:center;margin-bottom:14px;">
+          <canvas id="paynowQrCanvas" style="max-width:220px;width:100%;height:auto;border-radius:10px;border:1px solid var(--line);"></canvas>
+        </div>
+        <div style="text-align:center;margin-bottom:18px;">
+          <div class="hint" style="margin-bottom:2px;">Or pay manually to</div>
+          <div style="font-weight:700;font-size:17px;letter-spacing:0.3px;" id="paynowNumberText"></div>
+        </div>
+        <a class="btn btn-primary btn-block" id="paynowWhatsappLink" target="_blank" rel="noopener">Message us on WhatsApp once paid</a>
         <p class="hint" style="margin-top:14px;">We'll confirm your booking once we've received payment.</p>
         <button class="btn btn-ghost btn-block" id="paynowDoneBtn" style="margin-top:14px;">Done</button>
       </div>
@@ -458,8 +466,16 @@ const SUPABASE_URL = "https://nctegkzmexirmmvvvfsi.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_NeRf8EdEC920z_Mv-fv5cA_3W2noT1J";
 const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // no longer added to the fare — kept only so loadPlatformFee() has somewhere to fall back to; see CARD_SURCHARGE_RATE below for the fee that's actually charged now
 const CARD_SURCHARGE_RATE = 0.036; // added on top of the base fare ONLY if the customer pays by card — PayNow has no added fee
-const CLOUDGO_WHATSAPP_NUMBER = "6580371366"; // TODO(Ben): fill in your WhatsApp Business number, digits only, country code first — e.g. "6591234567"
-const APP_VERSION = "v2026.09.16-2";
+const CLOUDGO_WHATSAPP_NUMBER = "65XXXXXXXX"; // TODO(Ben): fill in your WhatsApp Business number, digits only, country code first — e.g. "6591234567"
+// PayNow QR / manual-number details, shown on the PayNow screen before WhatsApp.
+// "2" = UEN (a company PayNow, tied to your business's UEN registration) — use this
+// if that's what you've set up. "0" = mobile number instead, if you're collecting
+// PayNow to a personal/business mobile line rather than a UEN.
+const CLOUDGO_PAYNOW_PROXY_TYPE = "2"; // TODO(Ben): "2" for UEN, or "0" for mobile number
+const CLOUDGO_PAYNOW_UEN = "TXXXXXXXXXX"; // TODO(Ben): fill in your company's PayNow UEN (or mobile number in +65XXXXXXXX format if using proxy type "0")
+const CLOUDGO_PAYNOW_DISPLAY_NUMBER = "UEN TXXXXXXXXXX"; // TODO(Ben): what's shown as text under the QR — e.g. "UEN 201912345A" or "+65 9123 4567"
+const CLOUDGO_PAYNOW_MERCHANT_NAME = "CloudGo"; // shown as the payee name inside some banking apps when scanning
+const APP_VERSION = "v2026.09.16-3";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -949,10 +965,77 @@ async function choosePaynowPayment(){
   const ref = String(bookingId).slice(-6).toUpperCase();
   const waText = `Hi CloudGo! I'd like to pay for booking #${ref} — ${money(total)} via PayNow. My PayNow reference is #${ref}.`;
   el("paynowWhatsappLink").href = `https://wa.me/${CLOUDGO_WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
-  el("paynowHandoffText").textContent = `Send ${money(total)} via PayNow, then message us on WhatsApp with your reference #${ref} so we can confirm it.`;
+  el("paynowHandoffText").textContent = `Scan the QR code with your banking app to pay ${money(total)}, or send it manually to the PayNow number below. Then message us on WhatsApp so we can confirm it.`;
+  el("paynowNumberText").textContent = CLOUDGO_PAYNOW_DISPLAY_NUMBER;
+  renderPaynowQr(total, ref);
 
   el("paymentMethodPanel").querySelector(".card").style.display = "none";
   el("paynowHandoffCard").style.display = "block";
+}
+
+// Renders a scannable PayNow QR for this exact amount + booking reference onto
+// #paynowQrCanvas, using the QRCode library loaded from jsdelivr (see <head>).
+function renderPaynowQr(amount, reference){
+  const canvas = el("paynowQrCanvas");
+  try{
+    const payload = buildPaynowQrPayload(amount, reference);
+    window.QRCode.toCanvas(canvas, payload, { width: 220, margin: 1 }, (err) => {
+      if (err){ canvas.style.display = "none"; console.error("PayNow QR render failed", err); }
+      else { canvas.style.display = "block"; }
+    });
+  } catch(e){
+    canvas.style.display = "none";
+    console.error("Couldn't build PayNow QR payload", e);
+  }
+}
+
+// Builds a PayNow SGQR (EMVCo) payload string for a fixed-amount, single-use QR —
+// the same format Singapore banking apps read when you scan "Pay via PayNow" QR
+// codes elsewhere. Amount is fixed and non-editable (point of initiation "12"), with
+// the short booking reference carried in the Additional Data Field Template (tag 62)
+// as a bill number, so it shows up in the payer's banking app next to the payment.
+// NOTE: this was built from the public EMVCo/SGQR field spec, not tested against a
+// live PayNow-scanning bank app yet — scan-test it once CLOUDGO_PAYNOW_UEN is filled
+// in for real, before relying on it in production.
+function buildPaynowQrPayload(amount, reference){
+  const tlv = (id, value) => `${id}${String(value.length).padStart(2, "0")}${value}`;
+
+  const merchantAccountInfo =
+    tlv("00", "SG.PAYNOW") +
+    tlv("01", CLOUDGO_PAYNOW_PROXY_TYPE) +
+    tlv("02", CLOUDGO_PAYNOW_UEN) +
+    tlv("03", "0"); // amount is fixed, not editable by the payer
+
+  const additionalData = tlv("01", reference); // bill number / reference
+
+  let payload =
+    tlv("00", "01") +                              // payload format indicator
+    tlv("01", "12") +                               // point of initiation: dynamic, fixed amount
+    tlv("26", merchantAccountInfo) +
+    tlv("52", "0000") +                             // merchant category code (generic/unregistered)
+    tlv("53", "702") +                               // transaction currency: SGD
+    tlv("54", Number(amount).toFixed(2)) +           // transaction amount
+    tlv("58", "SG") +                                // country code
+    tlv("59", CLOUDGO_PAYNOW_MERCHANT_NAME) +        // merchant name
+    tlv("60", "Singapore") +                         // merchant city
+    tlv("62", additionalData);
+
+  payload += "6304"; // CRC tag + length; value appended below
+  return payload + crc16ccitt(payload);
+}
+
+// CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no final XOR) — the checksum EMVCo
+// QR payloads use for their final tag (63).
+function crc16ccitt(str){
+  let crc = 0xFFFF;
+  for (let i = 0; i < str.length; i++){
+    crc ^= str.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++){
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+      crc &= 0xFFFF;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
 }
 
 async function chooseCardPayment(){
