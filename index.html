@@ -424,8 +424,11 @@
       <div class="card" id="paynowHandoffCard" style="display:none;">
         <h2 style="font-size:19px;margin-bottom:6px;">Pay via PayNow</h2>
         <p class="hint" style="margin-bottom:14px;" id="paynowHandoffText"></p>
-        <div style="display:flex;justify-content:center;margin-bottom:14px;">
+        <div style="display:flex;justify-content:center;margin-bottom:10px;">
           <canvas id="paynowQrCanvas" style="max-width:220px;width:100%;height:auto;border-radius:10px;border:1px solid var(--line);"></canvas>
+        </div>
+        <div style="text-align:center;margin-bottom:18px;">
+          <button class="btn btn-ghost btn-sm" type="button" id="paynowDownloadQrBtn">Download QR code</button>
         </div>
         <div style="text-align:center;margin-bottom:18px;">
           <div class="hint" style="margin-bottom:2px;">Or pay manually to</div>
@@ -475,7 +478,7 @@ const CLOUDGO_PAYNOW_PROXY_TYPE = "2";
 const CLOUDGO_PAYNOW_UEN = "202441993K";
 const CLOUDGO_PAYNOW_DISPLAY_NUMBER = "CloudCam Technology Pte Ltd · UEN 202441993K"; // TODO(Ben): change this display text if you'd rather show something else
 const CLOUDGO_PAYNOW_MERCHANT_NAME = "CloudGo"; // shown as the payee name inside some banking apps when scanning — cosmetic only
-const APP_VERSION = "v2026.09.16-5";
+const APP_VERSION = "v2026.09.16-6";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -989,6 +992,22 @@ function renderPaynowQr(amount, reference){
   }
 }
 
+// Lets the customer save the just-rendered PayNow QR as a PNG — e.g. to scan it from
+// their photo gallery in a banking app instead of pointing the camera at this screen,
+// or to pay from a different device than the one they booked on.
+function downloadPaynowQr(){
+  const canvas = el("paynowQrCanvas");
+  if (!canvas.width || !canvas.height){
+    showToast("QR code isn't ready yet — try again in a moment.");
+    return;
+  }
+  const ref = currentPaymentChoice ? String(currentPaymentChoice.bookingId).slice(-6).toUpperCase() : "code";
+  const link = document.createElement("a");
+  link.download = `cloudgo-paynow-${ref}.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+}
+
 // Builds a PayNow SGQR (EMVCo) payload string for a fixed-amount, single-use QR —
 // the same format Singapore banking apps read when you scan "Pay via PayNow" QR
 // codes elsewhere. Amount is fixed and non-editable (point of initiation "12"), with
@@ -1488,6 +1507,7 @@ async function initApp(){
   el("choosePaynowBtn").addEventListener("click", choosePaynowPayment);
   el("chooseCardBtn").addEventListener("click", chooseCardPayment);
   el("paynowDoneBtn").addEventListener("click", closePaymentMethodChoice);
+  el("paynowDownloadQrBtn").addEventListener("click", downloadPaynowQr);
 }
 
 async function loadPlatformFee(){
