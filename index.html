@@ -411,8 +411,26 @@
       </div>
     </div>
 
-    <!-- Payment step: shown after booking (or from My Bookings for an unpaid one) — only when we
-         couldn't auto-charge a saved card, see startPaymentFlow() -->
+    <!-- Payment method choice: shown right after booking (or from My Bookings for an unpaid one),
+         before any Airwallex involvement — see showPaymentMethodChoice() -->
+    <div id="paymentMethodPanel" style="display:none;">
+      <div class="card">
+        <h2 style="font-size:19px;margin-bottom:6px;">How would you like to pay?</h2>
+        <p class="hint" style="margin-bottom:18px;" id="paymentMethodHint"></p>
+        <button class="btn btn-primary btn-block" id="choosePaynowBtn" style="margin-bottom:10px;text-align:left;"></button>
+        <button class="btn btn-ghost btn-block" id="chooseCardBtn" style="text-align:left;"></button>
+      </div>
+      <div class="card" id="paynowHandoffCard" style="display:none;">
+        <h2 style="font-size:19px;margin-bottom:6px;">Pay via PayNow</h2>
+        <p class="hint" style="margin-bottom:18px;" id="paynowHandoffText"></p>
+        <a class="btn btn-primary btn-block" id="paynowWhatsappLink" target="_blank" rel="noopener">Message us on WhatsApp</a>
+        <p class="hint" style="margin-top:14px;">We'll confirm your booking once we've received payment.</p>
+        <button class="btn btn-ghost btn-block" id="paynowDoneBtn" style="margin-top:14px;">Done</button>
+      </div>
+    </div>
+
+    <!-- Payment step: shown after choosing "Card" above (or from My Bookings for an unpaid one) — only
+         when we couldn't auto-charge a saved card, see startPaymentFlow() -->
     <div id="paymentStepPanel" style="display:none;">
       <div class="card">
         <h2 style="font-size:19px;margin-bottom:6px;">Complete payment</h2>
@@ -438,8 +456,10 @@
    ================================================================== */
 const SUPABASE_URL = "https://nctegkzmexirmmvvvfsi.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_NeRf8EdEC920z_Mv-fv5cA_3W2noT1J";
-const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // used only if admin_settings can't be read
-const APP_VERSION = "v2026.09.11-1";
+const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // no longer added to the fare — kept only so loadPlatformFee() has somewhere to fall back to; see CARD_SURCHARGE_RATE below for the fee that's actually charged now
+const CARD_SURCHARGE_RATE = 0.036; // added on top of the base fare ONLY if the customer pays by card — PayNow has no added fee
+const CLOUDGO_WHATSAPP_NUMBER = "65XXXXXXXX"; // TODO(Ben): fill in your WhatsApp Business number, digits only, country code first — e.g. "6591234567"
+const APP_VERSION = "v2026.09.16-2";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -459,6 +479,7 @@ let editingBookingId = null;
 let addressFormPoint = { lat: null, lng: null };
 let airwallexInitialized = false;
 let currentDropInElement = null; // temp geocode result while adding/editing a saved address
+let currentPaymentChoice = null; // { bookingId, subtotal, tip } while paymentMethodPanel is open — see showPaymentMethodChoice()
 
 /* ---------------- Helpers ---------------- */
 function el(id){ return document.getElementById(id); }
@@ -875,8 +896,87 @@ async function ensureAirwallexInit(){
   airwallexInitialized = true;
 }
 
-// Called right after a booking is created, and from the "Complete payment" button
-// in My Bookings. create-payment-intent tries a silent charge against a saved,
+// Called right after a booking is created, and from the "Complete payment" button in
+// My Bookings, before any Airwallex/card involvement. Lets the customer choose PayNow
+// (free, manual WhatsApp handoff — no Airwallex intent at all) or Card (existing
+// Airwallex drop-in flow, +3.6% surcharge). subtotal/tip are the trip components
+// BEFORE any card surcharge, since the surcharge only applies once Card is chosen.
+function showPaymentMethodChoice(bookingId, subtotal, tip){
+  currentPaymentChoice = { bookingId, subtotal, tip };
+
+  const paynowTotal = Math.round((subtotal + tip) * 100) / 100;
+  const cardSurcharge = Math.round(subtotal * CARD_SURCHARGE_RATE * 100) / 100;
+  const cardTotal = Math.round((subtotal + cardSurcharge + tip) * 100) / 100;
+
+  el("paymentMethodHint").textContent = "This price is locked in. PayNow has no extra fee — you'll send payment over WhatsApp and we'll confirm it. Card adds a 3.6% card fee.";
+  el("choosePaynowBtn").textContent = `Pay by PayNow — ${money(paynowTotal)} (no extra fee)`;
+  el("chooseCardBtn").textContent = `Pay by Card — ${money(cardTotal)} (incl. 3.6% card fee)`;
+  el("paynowHandoffCard").style.display = "none";
+  el("paymentMethodPanel").querySelector(".card").style.display = "block";
+
+  el("panelBook").style.display = "none";
+  el("panelHistory").style.display = "none";
+  el("panelProfile").style.display = "none";
+  document.querySelector(".tabs").style.display = "none";
+  el("paymentStepPanel").style.display = "none";
+  el("paymentMethodPanel").style.display = "block";
+}
+
+function closePaymentMethodChoice(){
+  currentPaymentChoice = null;
+  el("paymentMethodPanel").style.display = "none";
+  document.querySelector(".tabs").style.display = "flex";
+  switchTab("history");
+}
+
+async function choosePaynowPayment(){
+  if (!currentPaymentChoice) return;
+  const { bookingId, subtotal, tip } = currentPaymentChoice;
+  const total = Math.round((subtotal + tip) * 100) / 100;
+
+  const { error } = await sb.from("client_bookings").update({
+    payment_method: "paynow",
+    payment_status: "paynow_pending",
+    quoted_platform_fee: 0,
+    quoted_total: total
+  }).eq("id", bookingId);
+
+  if (error){
+    showToast("Couldn't save your payment choice: " + error.message + " — please try again.");
+    return;
+  }
+
+  const ref = String(bookingId).slice(-6).toUpperCase();
+  const waText = `Hi CloudGo! I'd like to pay for booking #${ref} — ${money(total)} via PayNow. My PayNow reference is #${ref}.`;
+  el("paynowWhatsappLink").href = `https://wa.me/${CLOUDGO_WHATSAPP_NUMBER}?text=${encodeURIComponent(waText)}`;
+  el("paynowHandoffText").textContent = `Send ${money(total)} via PayNow, then message us on WhatsApp with your reference #${ref} so we can confirm it.`;
+
+  el("paymentMethodPanel").querySelector(".card").style.display = "none";
+  el("paynowHandoffCard").style.display = "block";
+}
+
+async function chooseCardPayment(){
+  if (!currentPaymentChoice) return;
+  const { bookingId, subtotal, tip } = currentPaymentChoice;
+  const cardSurcharge = Math.round(subtotal * CARD_SURCHARGE_RATE * 100) / 100;
+  const total = Math.round((subtotal + cardSurcharge + tip) * 100) / 100;
+
+  const { error } = await sb.from("client_bookings").update({
+    payment_method: "card",
+    quoted_platform_fee: cardSurcharge,
+    quoted_total: total
+  }).eq("id", bookingId);
+
+  if (error){
+    showToast("Couldn't save your payment choice: " + error.message + " — please try again.");
+    return;
+  }
+
+  el("paymentMethodPanel").style.display = "none";
+  await startPaymentFlow(bookingId, total);
+}
+
+// create-payment-intent tries a silent charge against a saved,
 // merchant-triggerable card first (see save-card-setup's "Add a card" flow below);
 // if that goes through, there's nothing more for the client to do. If not — no
 // saved card yet, or the silent attempt didn't authorize — we fall back to the
@@ -1066,8 +1166,10 @@ function calculateFareForBooking(vehicleRate, distanceKm, additionalStops, tip){
   const baseFare = Number(vehicleRate.base_fare);
   const distanceFare = distanceKm * Number(vehicleRate.per_km_rate);
   const stopFare = additionalStops * Number(vehicleRate.additional_stop_fee);
-  const total = baseFare + distanceFare + stopFare + platformFlatFee + Number(tip || 0);
-  return { baseFare, distanceFare, stopFare, platformFee: platformFlatFee, tip: Number(tip || 0), total };
+  // No card/PayNow fee here — bulk-uploaded bookings aren't paid through the live
+  // payment-method step, so there's nothing to add a card surcharge on top of yet.
+  const total = baseFare + distanceFare + stopFare + Number(tip || 0);
+  return { baseFare, distanceFare, stopFare, platformFee: 0, tip: Number(tip || 0), total };
 }
 
 el("downloadBulkTemplateBtn").addEventListener("click", () => {
@@ -1295,6 +1397,9 @@ async function initApp(){
   wireAddressForm();
   el("acctSaveBtn").addEventListener("click", saveAccountSettings);
   el("paymentDoneBtn").addEventListener("click", closePaymentStep);
+  el("choosePaynowBtn").addEventListener("click", choosePaynowPayment);
+  el("chooseCardBtn").addEventListener("click", chooseCardPayment);
+  el("paynowDoneBtn").addEventListener("click", closePaymentMethodChoice);
 }
 
 async function loadPlatformFee(){
@@ -1549,7 +1654,7 @@ function computeFare(){
   const distanceFare = distKm * Number(selectedVehicle.per_km_rate);
   const stopFare = additionalStops * Number(selectedVehicle.additional_stop_fee);
   const tripFare = baseFare + distanceFare + stopFare;
-  const total = Math.round((tripFare + platformFlatFee + tipAmount) * 100) / 100;
+  const total = Math.round((tripFare + tipAmount) * 100) / 100;
 
   const distanceNote = currentDistanceSource === "straight-line"
     ? "Driving route unavailable right now, so this uses a straight-line distance estimate. "
@@ -1557,11 +1662,11 @@ function computeFare(){
 
   el("fareSummary").innerHTML = `
     <div class="fare-row total"><span>Total price</span><span>${money(total)}</span></div>
-    <div class="fare-note">${tipAmount > 0 ? `Includes a ${money(tipAmount)} tip for your driver. ` : ""}${distanceNote}This price is locked in once you book.</div>
+    <div class="fare-note">${tipAmount > 0 ? `Includes a ${money(tipAmount)} tip for your driver. ` : ""}${distanceNote}Pay by PayNow at no extra cost, or by card for a ${(CARD_SURCHARGE_RATE*100).toFixed(1)}% card fee — you'll choose after booking. This price is locked in once you book.</div>
   `;
   submitBtn.disabled = false;
 
-  return { distKm, additionalStops, baseFare, distanceFare, stopFare, platformFlatFee, tipAmount, total };
+  return { distKm, additionalStops, baseFare, distanceFare, stopFare, tipAmount, total };
 }
 
 /* ---------------- Submit booking ---------------- */
@@ -1616,7 +1721,7 @@ async function submitBooking(){
     quoted_base_fare: fare.baseFare,
     quoted_distance_fare: fare.distanceFare,
     quoted_stop_fare: fare.stopFare,
-    quoted_platform_fee: fare.platformFlatFee,
+    quoted_platform_fee: 0, // set for real once a payment method is chosen — see showPaymentMethodChoice()
     tip_amount: fare.tipAmount,
     quoted_total: fare.total
   };
@@ -1665,7 +1770,7 @@ async function submitBooking(){
   renderStops();
   computeFare();
 
-  startPaymentFlow(newBooking.id, fare.total);
+  showPaymentMethodChoice(newBooking.id, fare.baseFare + fare.distanceFare + fare.stopFare, fare.tipAmount);
 }
 
 /* ---------------- History ---------------- */
@@ -1707,7 +1812,7 @@ async function loadHistory(){
           ${b.notes ? `<div class="meta">${b.notes}</div>` : ""}
           <div class="meta">Booked ${when}</div>
           ${b.status === "rejected" && b.rejection_reason ? `<div class="meta" style="color:var(--danger);">Reason: ${b.rejection_reason}</div>` : ""}
-          ${needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;" data-pay-id="${b.id}" data-pay-amount="${b.quoted_total}">Complete payment</button>` : `<div class="meta">Payment: ${b.payment_status}</div>`}
+          ${needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;" data-pay-id="${b.id}" data-pay-subtotal="${(Number(b.quoted_base_fare)||0) + (Number(b.quoted_distance_fare)||0) + (Number(b.quoted_stop_fare)||0)}" data-pay-tip="${Number(b.tip_amount)||0}">Complete payment</button>` : `<div class="meta">Payment: ${b.payment_status === "paynow_pending" ? "Awaiting PayNow confirmation" : b.payment_status}</div>`}
           ${b.status === "pending" && needsPayment ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-edit-id="${b.id}">Edit</button>` : ""}
           ${b.status === "pending" ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-cancel-id="${b.id}">Cancel booking</button>` : ""}
           <button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-reorder-id="${b.id}">Book again</button>
@@ -1728,7 +1833,7 @@ async function loadHistory(){
 
   document.querySelectorAll("[data-pay-id]").forEach(btn => {
     btn.addEventListener("click", () => {
-      startPaymentFlow(btn.dataset.payId, Number(btn.dataset.payAmount));
+      showPaymentMethodChoice(btn.dataset.payId, Number(btn.dataset.paySubtotal), Number(btn.dataset.payTip));
     });
   });
   document.querySelectorAll("[data-cancel-id]").forEach(btn => {
