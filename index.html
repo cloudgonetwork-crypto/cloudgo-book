@@ -466,16 +466,16 @@ const SUPABASE_URL = "https://nctegkzmexirmmvvvfsi.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_NeRf8EdEC920z_Mv-fv5cA_3W2noT1J";
 const PLATFORM_FLAT_FEE_FALLBACK = 1.50; // no longer added to the fare — kept only so loadPlatformFee() has somewhere to fall back to; see CARD_SURCHARGE_RATE below for the fee that's actually charged now
 const CARD_SURCHARGE_RATE = 0.036; // added on top of the base fare ONLY if the customer pays by card — PayNow has no added fee
-const CLOUDGO_WHATSAPP_NUMBER = "65XXXXXXXX"; // TODO(Ben): fill in your WhatsApp Business number, digits only, country code first — e.g. "6591234567"
+const CLOUDGO_WHATSAPP_NUMBER = "6580371366"; // CloudGo's company WhatsApp Business number
 // PayNow QR / manual-number details, shown on the PayNow screen before WhatsApp.
-// "2" = UEN (a company PayNow, tied to your business's UEN registration) — use this
-// if that's what you've set up. "0" = mobile number instead, if you're collecting
-// PayNow to a personal/business mobile line rather than a UEN.
-const CLOUDGO_PAYNOW_PROXY_TYPE = "2"; // TODO(Ben): "2" for UEN, or "0" for mobile number
-const CLOUDGO_PAYNOW_UEN = "TXXXXXXXXXX"; // TODO(Ben): fill in your company's PayNow UEN (or mobile number in +65XXXXXXXX format if using proxy type "0")
-const CLOUDGO_PAYNOW_DISPLAY_NUMBER = "UEN TXXXXXXXXXX"; // TODO(Ben): what's shown as text under the QR — e.g. "UEN 201912345A" or "+65 9123 4567"
-const CLOUDGO_PAYNOW_MERCHANT_NAME = "CloudGo"; // shown as the payee name inside some banking apps when scanning
-const APP_VERSION = "v2026.09.16-3";
+// UEN below is CloudCam Technology Pte Ltd's real PayNow proxy (from Ben's MariBank
+// PayNow QR, Sep 2026) — proxy type "2" = UEN-based company PayNow, as opposed to "0"
+// for a personal/business mobile number.
+const CLOUDGO_PAYNOW_PROXY_TYPE = "2";
+const CLOUDGO_PAYNOW_UEN = "202441993K";
+const CLOUDGO_PAYNOW_DISPLAY_NUMBER = "CloudCam Technology Pte Ltd · UEN 202441993K"; // TODO(Ben): change this display text if you'd rather show something else
+const CLOUDGO_PAYNOW_MERCHANT_NAME = "CloudGo"; // shown as the payee name inside some banking apps when scanning — cosmetic only
+const APP_VERSION = "v2026.09.16-5";
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -994,9 +994,14 @@ function renderPaynowQr(amount, reference){
 // codes elsewhere. Amount is fixed and non-editable (point of initiation "12"), with
 // the short booking reference carried in the Additional Data Field Template (tag 62)
 // as a bill number, so it shows up in the payer's banking app next to the payment.
-// NOTE: this was built from the public EMVCo/SGQR field spec, not tested against a
-// live PayNow-scanning bank app yet — scan-test it once CLOUDGO_PAYNOW_UEN is filled
-// in for real, before relying on it in production.
+// NOTE: this field structure and the CRC16 checksum were verified byte-for-byte
+// against a real PayNow QR Ben generated from his MariBank app for CloudCam
+// Technology's UEN (Sep 2026) — decoding that QR produced the exact same tag
+// layout and the exact same CRC our crc16ccitt() computes for it. What's NOT yet
+// scan-tested is this specific variant (fixed non-editable amount + a bill-number
+// reference in tag 62 — Ben's bank QR was amount-editable with no tag 62 at all),
+// so do one real scan-and-pay test for a small amount once this is live, just to
+// be sure a fixed amount + reference doesn't trip up any banking app.
 function buildPaynowQrPayload(amount, reference){
   const tlv = (id, value) => `${id}${String(value.length).padStart(2, "0")}${value}`;
 
