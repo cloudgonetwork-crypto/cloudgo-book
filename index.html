@@ -10,6 +10,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://static.airwallex.com/components/sdk/v1/index.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --mist:#F7FAFD; --white:#FFFFFF; --ink:#0B1A2B; --ink-soft:#445064; --ink-faint:#7C8896;
@@ -1670,6 +1672,7 @@ async function submitBooking(){
 const DELIVERY_STATUS_LABELS = { open: "Finding a driver", assigned: "Driver assigned", in_progress: "Picked up — on the way", completed: "Delivered", cancelled: "Cancelled" };
 
 async function loadHistory(){
+  teardownAllTracking();
   el("historyList").innerHTML = `<div class="hint">Loading your bookings…</div>`;
   const { data, error } = await sb.from("client_bookings")
     .select("*").eq("client_id", currentUser.id).order("created_at", { ascending: false });
@@ -1694,6 +1697,7 @@ async function loadHistory(){
       badgeLabel = DELIVERY_STATUS_LABELS[js] || js;
     }
     const showPhotos = b.converted_job_id && (b.job_status === "in_progress" || b.job_status === "completed");
+    const showTracking = b.converted_job_id && (b.job_status === "assigned" || b.job_status === "in_progress");
 
     return `
       <div class="card booking-card">
@@ -1708,6 +1712,11 @@ async function loadHistory(){
           ${b.status === "pending" ? `<button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-cancel-id="${b.id}">Cancel booking</button>` : ""}
           <button class="btn btn-ghost btn-sm" style="margin-top:10px;margin-left:8px;" data-reorder-id="${b.id}">Book again</button>
           ${showPhotos ? `<div id="booking-photos-${b.id}" style="margin-top:10px;"></div>` : ""}
+          ${showTracking ? `
+            <div style="margin-top:10px;">
+              <div id="booking-track-map-${b.id}" style="width:100%;height:180px;border-radius:10px;overflow:hidden;background:var(--mist);"></div>
+              <div class="meta" id="booking-track-status-${b.id}" style="margin-top:6px;">Loading driver location…</div>
+            </div>` : ""}
         </div>
         <div style="text-align:right;">
           <span class="badge ${badgeClass}">${badgeLabel}</span>
@@ -1734,6 +1743,58 @@ async function loadHistory(){
 
   data.filter(b => b.converted_job_id && (b.job_status === "in_progress" || b.job_status === "completed"))
     .forEach(b => loadBookingPhotos(b.id, b.converted_job_id));
+  data.filter(b => b.converted_job_id && (b.job_status === "assigned" || b.job_status === "in_progress"))
+    .forEach(b => initDriverTracking(b.id, b.converted_job_id));
+}
+
+/* ---------------- Live driver tracking (while a delivery is assigned/in progress) ---------------- */
+const trackingSessions = {}; // bookingId -> { map, marker, channel }
+function teardownTracking(bookingId){
+  const t = trackingSessions[bookingId];
+  if (!t) return;
+  try{ if (t.channel) sb.removeChannel(t.channel); }catch(e){}
+  try{ if (t.map) t.map.remove(); }catch(e){}
+  delete trackingSessions[bookingId];
+}
+function teardownAllTracking(){
+  Object.keys(trackingSessions).forEach(teardownTracking);
+}
+function timeAgoShort(iso){
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return "just now";
+  if (secs < 3600) return Math.floor(secs / 60) + "m ago";
+  return Math.floor(secs / 3600) + "h ago";
+}
+async function initDriverTracking(bookingId, jobId){
+  const mapDiv = el(`booking-track-map-${bookingId}`);
+  const statusEl = el(`booking-track-status-${bookingId}`);
+  if (!mapDiv) return;
+  try{
+    const { data: job } = await sb.from("contract_jobs").select("assigned_to").eq("id", jobId).maybeSingle();
+    const driverId = job && job.assigned_to;
+    if (!driverId){ if (statusEl) statusEl.textContent = "No driver assigned yet."; return; }
+
+    const { data: loc } = await sb.from("driver_locations").select("lat,lng,updated_at").eq("driver_id", driverId).maybeSingle();
+    const startLatLng = loc ? [loc.lat, loc.lng] : [1.3521, 103.8198]; // fall back to central Singapore until a location arrives
+
+    const map = L.map(mapDiv, { attributionControl: false, zoomControl: true }).setView(startLatLng, loc ? 15 : 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+    const marker = L.marker(startLatLng).addTo(map);
+
+    if (statusEl) statusEl.textContent = loc ? `Live — updated ${timeAgoShort(loc.updated_at)}` : "Waiting for the driver's location…";
+
+    const channel = sb.channel(`driver-loc-${bookingId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_locations', filter: `driver_id=eq.${driverId}` }, payload => {
+        const row = payload.new;
+        if (!row || row.lat == null || row.lng == null) return;
+        marker.setLatLng([row.lat, row.lng]);
+        map.panTo([row.lat, row.lng]);
+        if (statusEl) statusEl.textContent = `Live — updated ${timeAgoShort(row.updated_at)}`;
+      })
+      .subscribe();
+
+    trackingSessions[bookingId] = { map, marker, channel };
+  }catch(e){ console.error("driver tracking init failed", e); if (statusEl) statusEl.textContent = "Couldn't load live tracking right now."; }
 }
 
 async function getJobPhotoUrl(path){
@@ -1885,6 +1946,7 @@ function startHistoryPolling(){
 }
 function stopHistoryPolling(){
   if (historyPollInterval){ clearInterval(historyPollInterval); historyPollInterval = null; }
+  teardownAllTracking();
 }
 
 /* ---------------- Boot ---------------- */
